@@ -1,0 +1,44 @@
+# MDFourier-DOS build script (Open Watcom / wmake)
+#
+# Target: 32-bit protected mode DOS executable, CauseWay extender
+# bound into the .exe (no separate extender file needed).
+#
+# Usage:
+#   wmake            build build\mdf.exe
+#   wmake clean      remove build output
+#
+
+CC   = wcl386
+EXT  = causeway
+
+BIN  = mdf.exe
+
+SRCS = src\main.c src\env.c src\opl.c src\pit.c
+OBJS = build\main.obj build\env.obj build\opl.obj build\pit.obj
+
+# -q            quiet
+# -l=EXT        bind the given DOS extender into the output exe
+# -d2           full debug info (drop for release builds later)
+# -i=include    include header files
+CFLAGS = -q -l=$(EXT) -d2 -i=include
+
+all: $(BIN) .SYMBOLIC
+
+$(BIN): $(OBJS)
+	$(CC) $(CFLAGS) -fe=$(BIN) $(OBJS)
+
+build\main.obj: src\main.c
+	$(CC) $(CFLAGS) -fo=build\main.obj -c src\main.c
+
+build\env.obj: src\env.c
+	$(CC) $(CFLAGS) -fo=build\env.obj -c src\env.c
+
+build\opl.obj: src\opl.c
+	$(CC) $(CFLAGS) -fo=build\opl.obj -c src\opl.c
+
+build\pit.obj: src\pit.c
+	$(CC) $(CFLAGS) -fo=build\pit.obj -c src\pit.c
+
+clean: .SYMBOLIC
+	del build\*.obj
+	del *.exe
