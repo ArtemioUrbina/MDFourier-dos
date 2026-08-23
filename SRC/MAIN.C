@@ -8,6 +8,7 @@
 #include "env.h"
 #include "opl.h"
 #include "pit.h"
+#include "vsync.h"
 
 int main() {
     blaster_cfg_t cfg;
@@ -24,5 +25,6 @@ int main() {
         printf("found\n");
     } else
         printf("not found\n");
+
     return 0;
 }

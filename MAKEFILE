@@ -13,8 +13,8 @@ EXT  = causeway
 
 BIN  = mdf.exe
 
-SRCS = src\main.c src\env.c src\opl.c src\pit.c
-OBJS = build\main.obj build\env.obj build\opl.obj build\pit.obj
+SRCS = src\main.c src\env.c src\opl.c src\pit.c src\vsync.c
+OBJS = build\main.obj build\env.obj build\opl.obj build\pit.obj build\vsync.obj
 
 # -q            quiet
 # -l=EXT        bind the given DOS extender into the output exe
@@ -24,8 +24,10 @@ CFLAGS = -q -l=$(EXT) -d2 -i=include
 
 all: $(BIN) .SYMBOLIC
 
+# Linking wlink directly
 $(BIN): $(OBJS)
-	$(CC) $(CFLAGS) -fe=$(BIN) $(OBJS)
+	%write build\link.lnk FILE { $(OBJS) }
+	wlink @build\link.lnk name $(BIN) system $(EXT)
 
 build\main.obj: src\main.c
 	$(CC) $(CFLAGS) -fo=build\main.obj -c src\main.c
@@ -38,6 +40,9 @@ build\opl.obj: src\opl.c
 
 build\pit.obj: src\pit.c
 	$(CC) $(CFLAGS) -fo=build\pit.obj -c src\pit.c
+
+build\vsync.obj: src\vsync.c
+	$(CC) $(CFLAGS) -fo=build\vsync.obj -c src\vsync.c
 
 clean: .SYMBOLIC
 	del build\*.obj
