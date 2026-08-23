@@ -20,6 +20,7 @@ int main() {
     print_env(&cfg);
     printf("Probing FM (%s)...", opl_driver.name);
     if(opl_driver.detect()) {
+        opl_driver.init();
         printf("found\n");
     } else
         printf("not found\n");

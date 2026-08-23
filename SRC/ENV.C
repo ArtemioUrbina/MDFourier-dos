@@ -18,6 +18,9 @@ int parse_number(char *str, uint8_t base) {
         else
             return value;
 
+        if (digit >= base)
+            return value;
+
         value = value * base + digit;
         str ++;
     }
