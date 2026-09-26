@@ -13,8 +13,8 @@ EXT  = causeway
 
 BIN  = mdf.exe
 
-SRCS = src\main.c src\env.c src\opl.c src\pit.c src\vsync.c
-OBJS = build\main.obj build\env.obj build\opl.obj build\pit.obj build\vsync.obj
+SRCS = src\main.c src\env.c src\pit.c src\vsync.c src\opltone.c src\mdf.c src\opl.c
+OBJS = build\main.obj build\env.obj build\pit.obj build\vsync.obj build\opltone.obj build\mdf.obj build\opl.obj
 
 # -q            quiet
 # -l=EXT        bind the given DOS extender into the output exe
@@ -43,6 +43,13 @@ build\pit.obj: src\pit.c
 
 build\vsync.obj: src\vsync.c
 	$(CC) $(CFLAGS) -fo=build\vsync.obj -c src\vsync.c
+
+build\opltone.obj: src\opltone.c
+	$(CC) $(CFLAGS) -fo=build\opltone.obj -c src\opltone.c
+
+build\mdf.obj: src\mdf.c
+	$(CC) $(CFLAGS) -fo=build\mdf.obj -c src\mdf.c
+
 
 clean: .SYMBOLIC
 	del build\*.obj
