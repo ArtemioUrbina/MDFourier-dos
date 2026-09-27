@@ -6,7 +6,13 @@
  * https://groups.google.com/g/comp.os.msdos.programmer/c/wE4xEMcvPvY?pli=1
  */
 
-#define PIT_FREQ_HZ 1193182ULL
+/*
+ * PIT clock is 105/88 MHz (14.31818 MHz / 12)
+ * us to PIT clocks is us * 105 / 88.
+ * Overflows past 40.9s, beyond what we need
+ */
+#define PIT_MUL 105UL
+#define PIT_DIV 88UL
 
 #define PIT_CMD 0x43
 #define PIT_CH0 0x40
@@ -21,18 +27,17 @@ uint16_t pit_read() {
     return (uint16_t)((hi << 8) | lo);
 }
 
-void pit_delay_us(uint64_t us) {
-    uint64_t clocks_needed;
+void pit_delay_us(uint32_t us) {
+    uint32_t clocks_needed;
     uint16_t prev;
 
-    clocks_needed =
-        (us * (uint64_t)PIT_FREQ_HZ + 999999ULL) / 1000000ULL;
+    /* rounded up, minimum delay */
+    clocks_needed = (us * PIT_MUL + (PIT_DIV - 1UL)) / PIT_DIV;
 
     prev = pit_read();
 
     while (clocks_needed != 0) {
-        uint16_t cur, counter_delta;
-        uint64_t clocks_elapsed;
+        uint16_t cur, counter_delta, clocks_elapsed;
 
         cur = pit_read();
 
@@ -47,12 +52,12 @@ void pit_delay_us(uint64_t us) {
          * for each input clock, so convert counter
          * units to PIT clocks.
          */
-        clocks_elapsed = (uint64_t)counter_delta / 2ULL;
+        clocks_elapsed = (uint16_t)(counter_delta / 2u);
 
-        if (clocks_elapsed > clocks_needed)
-            clocks_elapsed = clocks_needed;
-
-        clocks_needed -= clocks_elapsed;
+        if ((uint32_t)clocks_elapsed > clocks_needed)
+            clocks_needed = 0;
+        else
+            clocks_needed -= clocks_elapsed;
         prev = cur;
     }
 }

@@ -23,28 +23,35 @@ static const uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x1
  * keeps playing at the note's pitch. */
 static uint8_t b0_shadow[9];
 
+
+/*
+ * Fnum = freq * 2^(20-Block) / 49716, lowest Block with Fnum <= 1023.
+ *
+ * 32-bit only
+ * freq << (20-b) can overflow 32 bits for low blocks,
+ * but only when Fnum > 1023
+ * block is range-checked before shifting:
+ *
+ */
+#define OPL_FNUM_LIMIT (1024UL * 49716UL - 1UL)   /* 50,909,183 */
+
 void opl_freq_to_block_fnum(unsigned freq_hz, uint8_t *block, uint16_t *fnum)
 {
-    uint8_t  b;
-    uint64_t f = 0;
+    uint8_t b;
 
     if (freq_hz > OPL_MAX_FREQ_HZ)
         freq_hz = OPL_MAX_FREQ_HZ;
     if (freq_hz == 0)
         freq_hz = 1;
 
-    /* freq_hz << 20 can exceed 32 bits at the
-     * low end of the block search (b=0)  */
-    for (b = 0; b <= 7; b++) {
-        f = ((uint64_t)freq_hz << (20 - b)) / 49716ULL;
-        if (f <= 1023ULL)
+    /* OPL_MAX_FREQ_HZ for block 7 */
+    for (b = 0; b < 7; b++) {
+        if ((uint32_t)freq_hz <= (OPL_FNUM_LIMIT >> (20 - b)))
             break;
     }
-    if (b > 7)
-        b = 7;
 
     *block = b;
-    *fnum  = (uint16_t)f;
+    *fnum  = (uint16_t)(((uint32_t)freq_hz << (20 - b)) / 49716UL);
 }
 
 static uint8_t make_b0(uint8_t block, uint16_t fnum)

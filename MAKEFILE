@@ -1,56 +1,68 @@
 # MDFourier-DOS build script (Open Watcom / wmake)
 #
-# Target: 32-bit protected mode DOS executable, CauseWay extender
-# bound into the .exe (no separate extender file needed).
+# 16-bit real mode DOS executable, small model, no DOS extender
 #
 # Usage:
-#   wmake            build build\mdf.exe
+#   wmake            build mdf.exe
 #   wmake clean      remove build output
 #
 
 CC   = wcl386
-EXT  = causeway
 
 BIN  = mdf.exe
 
-SRCS = src\main.c src\env.c src\pit.c src\vsync.c src\opltone.c src\mdf.c src\opl.c
-OBJS = build\main.obj build\env.obj build\pit.obj build\vsync.obj build\opltone.obj build\mdf.obj build\opl.obj
+CC = wcc
+
+# Objects depend on headers
+HDRS = include\carddrv.h include\env.h include\mdf.h include\opl.h &
+       include\opltone.h include\pit.h include\vsync.h
+
+OBJS = build\main.obj build\env.obj build\pit.obj build\vsync.obj &
+       build\opltone.obj build\mdf.obj build\opl.obj
 
 # -q            quiet
-# -l=EXT        bind the given DOS extender into the output exe
+# -bt=dos       target DOS
+# -ms           small memory model (64K code + 64K data)
+# -0            8086/8088 instructions only
+# -fpi          uses an 8087 if present, software emulation if not
 # -d2           full debug info (drop for release builds later)
 # -i=include    include header files
-CFLAGS = -q -l=$(EXT) -d2 -i=include
+CFLAGS = -q -d2 -i=include
 
 all: $(BIN) .SYMBOLIC
 
+dirs: .SYMBOLIC
+    @if not exist build\nul mkdir build
+
 # Linking wlink directly
-$(BIN): $(OBJS)
-	%write build\link.lnk FILE { $(OBJS) }
-	wlink @build\link.lnk name $(BIN) system $(EXT)
+$(BIN): dirs $(OBJS)
+    %write build\link.lnk FILE { $(OBJS) }
+    wlink @build\link.lnk name $(BIN) system dos option stack=8192
 
-build\main.obj: src\main.c
-	$(CC) $(CFLAGS) -fo=build\main.obj -c src\main.c
+build\main.obj: src\main.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\main.c
 
-build\env.obj: src\env.c
-	$(CC) $(CFLAGS) -fo=build\env.obj -c src\env.c
+build\env.obj: src\env.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\env.c
 
-build\opl.obj: src\opl.c
-	$(CC) $(CFLAGS) -fo=build\opl.obj -c src\opl.c
+build\opl.obj: src\opl.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\opl.c
 
-build\pit.obj: src\pit.c
-	$(CC) $(CFLAGS) -fo=build\pit.obj -c src\pit.c
+build\pit.obj: src\pit.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\pit.c
 
-build\vsync.obj: src\vsync.c
-	$(CC) $(CFLAGS) -fo=build\vsync.obj -c src\vsync.c
+build\vsync.obj: src\vsync.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\vsync.c
 
-build\opltone.obj: src\opltone.c
-	$(CC) $(CFLAGS) -fo=build\opltone.obj -c src\opltone.c
+build\opltone.obj: src\opltone.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\opltone.c
 
-build\mdf.obj: src\mdf.c
-	$(CC) $(CFLAGS) -fo=build\mdf.obj -c src\mdf.c
+build\mdf.obj: src\mdf.c $(HDRS)
+    $(CC) $(CFLAGS) -fo=$@ src\mdf.c
+
 
 
 clean: .SYMBOLIC
-	del build\*.obj
-	del *.exe
+    @if exist build\*.obj del build\*.obj
+    @if exist build\*.lnk del build\*.lnk
+    @if exist mdf.exe del mdf.exe
