@@ -2,6 +2,7 @@
 #include <math.h>
 #include "mdf.h"
 #include "vsync.h"
+#include "kbd.h"
 
 /*
  * TIMING
@@ -24,32 +25,41 @@
 static uint8_t  sweep_block[MDF_MAX_STEPS];
 static uint16_t sweep_fnum[MDF_MAX_STEPS];
 
-static void silence(unsigned frames)
-{
-    unsigned i;
+/* ESC pressed */
+static int aborted;          
 
-    for (i = 0; i < frames; i++)
-        vsync_wait();
+static int check_abort() {
+    if (!aborted && kbd_poll_escape())
+        aborted = 1;
+    return aborted;
 }
 
-/* Load the SINE instrument and the reference frequency 
+static void silence(unsigned frames) {
+    unsigned i;
+
+    for (i = 0; i < frames; i++) {
+        if (check_abort())
+            return;
+        vsync_wait();
+    }
+}
+
+/* Reference tone registers, pre-computed  */
+static uint8_t  ref_block;
+static uint16_t ref_fnum;
+
+/* Load the SINE instrument and the reference frequency
  * Call at least one frame before pulse_train()
  */
-static void pulse_prepare(uint8_t channel)
-{
-    uint8_t  block;
-    uint16_t fnum;
-
+static void pulse_prepare(uint8_t channel) {
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
-    opl_freq_to_block_fnum(REFERENCE_HZ, &block, &fnum);
-    opl_note_set(channel, block, fnum);
+    opl_note_set(channel, ref_block, ref_fnum);
 }
 
 /* Must be entered right after a vsync_wait(), with pulse_prepare()
  * already done.
  */
-static unsigned pulse_train(uint8_t channel)
-{
+static unsigned pulse_train(uint8_t channel) {
     int i;
 
     for (i = 0; i < PULSE_COUNT; i++) {
@@ -63,16 +73,14 @@ static unsigned pulse_train(uint8_t channel)
 }
 
 /* Log-spaced frequency for sweep step [0, steps). */
-static unsigned sweep_freq(unsigned step, unsigned steps)
-{
+static unsigned sweep_freq(unsigned step, unsigned steps) {
     double t = (steps > 1) ? (double)step / (double)(steps - 1) : 0.0;
     double f = (double)SWEEP_MIN_HZ *
                pow((double)SWEEP_MAX_HZ / (double)SWEEP_MIN_HZ, t);
     return (unsigned)(f + 0.5);
 }
 
-static void sweep_build_table(unsigned steps)
-{
+static void sweep_build_table(unsigned steps) {
     unsigned step;
 
     for (step = 0; step < steps; step++)
@@ -82,9 +90,7 @@ static void sweep_build_table(unsigned steps)
 
 /* Must be entered right after a vsync_wait(), with the instrument
  * already loaded and sweep_build_table() already run. */
-static unsigned long run_sweep(uint8_t channel, unsigned frames,
-                               unsigned steps)
-{
+static unsigned long run_sweep(uint8_t channel, unsigned frames, unsigned steps) {
     unsigned step, frame, release_frame;
     unsigned long total_frames = 0;
 
@@ -95,17 +101,35 @@ static unsigned long run_sweep(uint8_t channel, unsigned frames,
         for (frame = 0; frame < frames; frame++) {
             if (frame == release_frame)
                 opl_note_off(channel);
+            if (check_abort()) {
+                opl_note_off(channel);
+                return total_frames;
+            }
             vsync_wait();
         }
         total_frames += frames;
+        if (aborted) {
+            opl_note_off(channel);
+            return total_frames;
+        }
     }
     opl_note_off(channel);
 
     return total_frames;
 }
 
-void mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps)
-{
+int end_sequence(uint8_t channel, unsigned long total_frames) {
+    vsync_end();
+    opl_note_off(channel);
+
+    if (aborted)
+        printf("\nAborted\n");
+    else
+        printf("\nSequence complete: %lu frames\n", total_frames);
+    return aborted;
+}
+
+int mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps) {
     unsigned long total_frames = 0;
 
     if (steps > MDF_MAX_STEPS)
@@ -118,25 +142,31 @@ void mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps)
            steps, frames, SWEEP_MIN_HZ, SWEEP_MAX_HZ);
 
     sweep_build_table(steps);
+    opl_freq_to_block_fnum(REFERENCE_HZ, &ref_block, &ref_fnum);
 
     pulse_prepare(channel);
 
+    aborted = 0;
+    kbd_poll_escape();
+    printf("Press ESC to abort\n");
+
     /* Align the first key-on to a frame edge */
-    vsync_wait();
+    vsync_begin();
 
     /* MDF Sequence */
     total_frames += pulse_train(channel);
-
-    silence(SILENCE_FRAMES);
-    total_frames += SILENCE_FRAMES;
 
     /* Silence, loading the sweep instrument one frame before it ends */
     silence(SILENCE_FRAMES - 1);
     opl_set_instrument(channel, OPL_INSTRUMENT_DEFAULT);
     silence(1);
     total_frames += SILENCE_FRAMES;
+    if (aborted)
+        return end_sequence(channel, total_frames);
 
     total_frames += run_sweep(channel, frames, steps);
+    if (aborted)
+        return end_sequence(channel, total_frames);
 
     /* Decay */
     silence(DECAY_FRAMES);
@@ -147,8 +177,10 @@ void mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps)
     pulse_prepare(channel);
     silence(1);
     total_frames += SILENCE_FRAMES;
+    if (aborted)
+        return end_sequence(channel, total_frames);
 
     total_frames += pulse_train(channel);
 
-    printf("\nSequence complete: %lu frames\n", total_frames);
+    return end_sequence(channel, total_frames);
 }

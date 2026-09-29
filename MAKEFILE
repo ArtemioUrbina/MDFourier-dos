@@ -5,21 +5,18 @@
 # Usage:
 #   wmake            build mdf.exe
 #   wmake clean      remove build output
-#
-
-CC   = wcl386
 
 BIN  = mdf.exe
-
 CC = wcc
 
 # Objects depend on headers
-HDRS = include\carddrv.h include\env.h include\mdf.h include\opl.h &
-       include\opltone.h include\pit.h include\vsync.h
+HDRS = include\carddrv.h include\env.h include\irq.h include\kbd.h &
+       include\mdf.h include\opl.h include\opltone.h include\pit.h &
+       include\vsync.h
 
-OBJS = build\main.obj build\env.obj build\pit.obj build\vsync.obj &
-       build\opltone.obj build\mdf.obj build\opl.obj
-
+OBJS = build\main.obj build\env.obj build\kbd.obj build\pit.obj &
+       build\vsync.obj build\opltone.obj build\mdf.obj &
+       build\opl.obj
 # -q            quiet
 # -bt=dos       target DOS
 # -ms           small memory model (64K code + 64K data)
@@ -27,42 +24,45 @@ OBJS = build\main.obj build\env.obj build\pit.obj build\vsync.obj &
 # -fpi          uses an 8087 if present, software emulation if not
 # -d2           full debug info (drop for release builds later)
 # -i=include    include header files
-CFLAGS = -q -d2 -i=include
+CFLAGS = -q -bt=dos -ms -0 -fpi -d2 -i=include
+
+
 
 all: $(BIN) .SYMBOLIC
 
 dirs: .SYMBOLIC
-    @if not exist build\nul mkdir build
+	@if not exist build\nul mkdir build
 
 # Linking wlink directly
 $(BIN): dirs $(OBJS)
-    %write build\link.lnk FILE { $(OBJS) }
-    wlink @build\link.lnk name $(BIN) system dos option stack=8192
+	%write build\link.lnk FILE { $(OBJS) }
+	wlink @build\link.lnk name mdf.exe system dos option stack=8192
 
 build\main.obj: src\main.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\main.c
+	$(CC) $(CFLAGS) -fo=$@ src\main.c
 
 build\env.obj: src\env.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\env.c
+	$(CC) $(CFLAGS) -fo=$@ src\env.c
 
-build\opl.obj: src\opl.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\opl.c
+build\kbd.obj: src\kbd.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\kbd.c
 
 build\pit.obj: src\pit.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\pit.c
+	$(CC) $(CFLAGS) -fo=$@ src\pit.c
 
 build\vsync.obj: src\vsync.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\vsync.c
+	$(CC) $(CFLAGS) -fo=$@ src\vsync.c
 
 build\opltone.obj: src\opltone.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\opltone.c
+	$(CC) $(CFLAGS) -fo=$@ src\opltone.c
 
 build\mdf.obj: src\mdf.c $(HDRS)
-    $(CC) $(CFLAGS) -fo=$@ src\mdf.c
+	$(CC) $(CFLAGS) -fo=$@ src\mdf.c
 
-
+build\opl.obj: src\opl.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\opl.c
 
 clean: .SYMBOLIC
-    @if exist build\*.obj del build\*.obj
-    @if exist build\*.lnk del build\*.lnk
-    @if exist mdf.exe del mdf.exe
+	@if exist build\*.obj del build\*.obj
+	@if exist build\*.lnk del build\*.lnk
+	@if exist mdf.exe del mdf.exe
