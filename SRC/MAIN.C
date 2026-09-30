@@ -4,6 +4,7 @@
  */
 
 #include <stdio.h>
+#include <i86.h>
 #include "carddrv.h"
 #include "env.h"
 #include "opl.h"
@@ -14,6 +15,16 @@
 
 #define SWEEP_FRAMES 20
 #define SWEEP_STEPS  128
+
+/* Windows virtualizes VGA, PIT and interrupts, so we check
+ * INT 2Fh AX=1600h for 00h or 80h in AL when it is not running */
+static int windows_running() {
+    union REGS reg;
+
+    reg.x.ax = 0x1600;
+    int86(0x2F, &reg, &reg);
+    return reg.h.al != 0x00 && reg.h.al != 0x80;
+}
 
 int main() {
     blaster_cfg_t cfg;
@@ -26,10 +37,15 @@ int main() {
     }
     print_env(&cfg);
 
+    if (windows_running()) {
+        printf("Running under Windows is not supported, exit Windows first\n");
+        return 0;
+    }
+
     pit_init();
 
     if (!vsync_calibrate(&hz)) {
-        printf("No vertical retrace found (VGA required)\n");
+        printf("No usable vertical retrace (VGA required)\n");
         return 0;
     }
     printf("Refresh: %.4f Hz (%0.4f ms per frame)\n", hz, 1000.0/hz);

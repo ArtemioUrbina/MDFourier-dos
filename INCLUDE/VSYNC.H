@@ -10,7 +10,7 @@ typedef struct {
 } vsync_stats_t;
 
 /* Measure the frame period, needed for the interrupt window. 
- * 0 if no VGA retrace.
+ * 0 if no VGA retrace or an out of range rate.
  * Needs pit_init() */
 int vsync_calibrate(double *hz);
 

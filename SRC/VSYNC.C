@@ -57,7 +57,9 @@ int vsync_calibrate(double *hz) {
     period_exact = (double)total / CALIB_FRAMES;
     period_clk = (total + CALIB_FRAMES / 2) / CALIB_FRAMES;
     *hz = PIT_HZ_F * CALIB_FRAMES / (double)total;
-    return 1;
+
+    /* Windows DOS box gives nonsense */
+    return (*hz >= 30.0 && *hz <= 120.0);
 }
 
 void vsync_begin() {
