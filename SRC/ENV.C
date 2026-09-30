@@ -46,7 +46,7 @@ int env_get_blaster(blaster_cfg_t *cfg) {
         while(*blaster == ' ')
             blaster++;
         if(*blaster) {
-            switch(toupper((char)*blaster)) {
+            switch(toupper((unsigned char)*blaster)) {
                 case 'A':
                     cfg->port = parse_number(blaster + 1, 16);
                     break;

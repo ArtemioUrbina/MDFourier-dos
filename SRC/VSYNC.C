@@ -132,4 +132,7 @@ void vsync_print_stats(const vsync_stats_t *s, unsigned long expected) {
         printf("  rate: %0.4fHz (%0.4fms per frame)\n",
                hz, 1000.0f/hz);
     }
+    if (s->bad)
+        printf("  WARNING: %lu bad frame(s), discard this capture\n",
+               s->bad);
 }

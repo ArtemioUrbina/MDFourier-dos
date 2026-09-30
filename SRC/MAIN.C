@@ -31,11 +31,10 @@ int main() {
     double        hz;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
-    if(!env_get_blaster(&cfg)) {
-        printf("Could not read BLASTER environment variable\n");
-        return 0;
-    }
-    print_env(&cfg);
+    if (env_get_blaster(&cfg))
+        print_env(&cfg);
+    else
+        printf("BLASTER: not set\n");
 
     if (windows_running()) {
         printf("Running under Windows is not supported, exit Windows first\n");
