@@ -30,7 +30,7 @@ int main() {
     blaster_cfg_t cfg;
     double        hz;
 
-    printf("MDFourier DOS - Artemio Urbina 2026\n");
+    printf("MDFourier DOS Artemio Urbina 2026\n");
     if(!env_get_blaster(&cfg)) {
         printf("Could not read BLASTER environment variable\n");
         return 0;
@@ -48,7 +48,8 @@ int main() {
         printf("No usable vertical retrace (VGA required)\n");
         return 0;
     }
-    printf("Refresh: %.4f Hz (%0.4f ms per frame)\n", hz, 1000.0/hz);
+    /* We don't print the preliminary for now */
+    /* printf("  Refresh: %0.4fHz (%0.4fms per frame)\n", hz, 1000.0/hz); */
 
     printf("Probing FM (%s)...", opl_driver.name);
     if(opl_driver.detect()) {

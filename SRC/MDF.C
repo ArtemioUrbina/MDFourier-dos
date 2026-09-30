@@ -121,10 +121,10 @@ static int end_sequence(uint8_t channel, unsigned long total_frames) {
     if (aborted) {
         printf("\nAborted\n");
         total_frames = stats.frames;
-    } else {
+    } else
         printf("\nSequence complete: %lu frames\n", total_frames);
-        vsync_print_stats(&stats, total_frames);
-    }
+
+    vsync_print_stats(&stats, total_frames);
     return aborted;
 }
 

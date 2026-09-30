@@ -123,10 +123,13 @@ void vsync_end(vsync_stats_t *out) {
 void vsync_print_stats(const vsync_stats_t *s, unsigned long expected) {
     printf("  frames: %lu expected, %lu played, %lu bad\n",
            expected, s->frames, s->bad);
-    printf("  length: %.4fs measured, %.4fs expected\n",
+    printf("  length: %0.4fs measured, %0.4fs expected\n",
            (double)s->total_clk/PIT_HZ_F,
            (double)expected*period_exact/PIT_HZ_F);
-    if (s->bad)
-        printf("  WARNING: %lu bad frame(s), discard this capture\n",
-               s->bad);
+    /* More precision, using the whole sequence */
+    if (!s->bad && s->total_clk) {
+        double hz = PIT_HZ_F * (double)s->frames / (double)s->total_clk;
+        printf("  rate: %0.4fHz (%0.4fms per frame)\n",
+               hz, 1000.0f/hz);
+    }
 }
