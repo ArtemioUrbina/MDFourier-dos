@@ -101,31 +101,30 @@ static unsigned long run_sweep(uint8_t channel, unsigned frames, unsigned steps)
         for (frame = 0; frame < frames; frame++) {
             if (frame == release_frame)
                 opl_note_off(channel);
-            if (check_abort()) {
-                opl_note_off(channel);
+            if (check_abort())
                 return total_frames;
-            }
             vsync_wait();
         }
         total_frames += frames;
-        if (aborted) {
-            opl_note_off(channel);
-            return total_frames;
-        }
     }
     opl_note_off(channel);
 
     return total_frames;
 }
 
-int end_sequence(uint8_t channel, unsigned long total_frames) {
-    vsync_end();
+static int end_sequence(uint8_t channel, unsigned long total_frames) {
+    vsync_stats_t stats;
+
+    vsync_end(&stats);
     opl_note_off(channel);
 
-    if (aborted)
+    if (aborted) {
         printf("\nAborted\n");
-    else
+        total_frames = stats.frames;
+    } else {
         printf("\nSequence complete: %lu frames\n", total_frames);
+        vsync_print_stats(&stats, total_frames);
+    }
     return aborted;
 }
 
