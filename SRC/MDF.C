@@ -1,8 +1,8 @@
 #include <stdio.h>
-#include <math.h>
 #include "mdf.h"
 #include "vsync.h"
 #include "kbd.h"
+#include "sweep.h"
 
 /*
  * TIMING
@@ -12,19 +12,10 @@
  *
  */
 
-#define SWEEP_MIN_HZ 20u
-#define SWEEP_MAX_HZ 6200u   /* OPL_MAX_FREQ_HZ (6209) */
-#define REFERENCE_HZ 6000u   /* pulse train / sync marker frequency */
 #define PULSE_COUNT  10
 #define SILENCE_FRAMES 20
 #define DECAY_FRAMES 5
 #define CHIPID_FRAMES 60
-
-#define MDF_MAX_STEPS 256
-
-/* Sweep register values, computed once before the sequence starts */
-static uint8_t  sweep_block[MDF_MAX_STEPS];
-static uint16_t sweep_fnum[MDF_MAX_STEPS];
 
 /* ESC pressed */
 static int aborted;          
@@ -45,28 +36,28 @@ static void silence(unsigned frames) {
     }
 }
 
-/* Reference tone registers, pre-computed  */
-static uint8_t  ref_block;
-static uint16_t ref_fnum;
-
 /* Load the SINE instrument and the reference frequency
  * Call at least one frame before pulse_train()
  */
 static void pulse_prepare(uint8_t channel) {
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
-    opl_note_set(channel, ref_block, ref_fnum);
+    opl_note_set(channel, REF_BLOCK, REF_FNUM);
 }
 
 /* OPL3-SAx, OPL3-L, OPL4) run from ~49516 Hz instead of 49716 Hz,
  * so it plays ~24 Hz lower at 6 kHz.
  *
- * Source: nerdlypleasures.blogspot.com/2018/01/opl23-frequency-1hz-ish-difference.html
+ * Source: https://nerdlypleasures.blogspot.com/2018/01/opl23-frequency-1hz-ish-difference.html
  *
- * Values measured with MDFourier from real hardware for testing with profile:
- * CLK y 2 5996.0215 8.2915
- * SB 2.0       5996.0000Hz     49715.8340Hz
- * Auditian32   5972.0000Hz     49516.8380Hz
- * ES1869       5985.0000Hz     49624.6275Hz
+ * Values measured with MDFourier from real hardware, using -j for 1hz alignment:
+ * ========================================================================
+ * Card                         Fm Chip     Chip ID Tone    Estimated Clock
+ * ========================================================================
+ * Soundblaster 2.0 CT1336A     OPL2        6002.3125Hz     49717.7547Hz
+ * SoundBlaster 16  CT1740      OPL3        6003.2500Hz     49725.5201Hz
+ * Yamaha Audician 32 Plus      OPL3-SAx    5978.3750Hz     49519.4780Hz
+ * CompaqÿES1869ÿ               ESS ESFM    5991.0625Hz     49624.5698Hz
+ * ========================================================================
  */
 static unsigned chip_id(uint8_t channel) {
     unsigned i;
@@ -100,32 +91,16 @@ static unsigned pulse_train(uint8_t channel) {
     return PULSE_COUNT * 2;
 }
 
-/* Log-spaced frequency for sweep step [0, steps). */
-static unsigned sweep_freq(unsigned step, unsigned steps) {
-    double t = (steps > 1) ? (double)step / (double)(steps - 1) : 0.0;
-    double f = (double)SWEEP_MIN_HZ *
-               pow((double)SWEEP_MAX_HZ / (double)SWEEP_MIN_HZ, t);
-    return (unsigned)(f + 0.5);
-}
-
-static void sweep_build_table(unsigned steps) {
-    unsigned step;
-
-    for (step = 0; step < steps; step++)
-        opl_freq_to_block_fnum(sweep_freq(step, steps),
-                               &sweep_block[step], &sweep_fnum[step]);
-}
-
 /* Must be entered right after a vsync_wait(), with the instrument
- * already loaded and sweep_build_table() already run. */
-static unsigned long run_sweep(uint8_t channel, unsigned frames, unsigned steps) {
+ * already loaded. */
+static unsigned long run_sweep(uint8_t channel, unsigned frames) {
     unsigned step, frame, release_frame;
     unsigned long total_frames = 0;
 
     release_frame = frames - frames / 5;
 
-    for (step = 0; step < steps; step++) {
-        opl_note_on_raw(channel, sweep_block[step], sweep_fnum[step]);
+    for (step = 0; step < SWEEP_STEPS; step++) {
+        opl_note_on_raw(channel, sweep[step].block, sweep[step].fnum);
         for (frame = 0; frame < frames; frame++) {
             if (frame == release_frame)
                 opl_note_off(channel);
@@ -156,20 +131,12 @@ static int end_sequence(uint8_t channel, unsigned long total_frames) {
     return aborted;
 }
 
-int mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps) {
+int mdf_run_full_test(uint8_t channel, unsigned frames) {
     unsigned long total_frames = 0;
-
-    if (steps > MDF_MAX_STEPS)
-        steps = MDF_MAX_STEPS;
-    if (steps == 0)
-        steps = 1;
 
     /* Everything slow here */
     printf("Frequency sweep: %u steps, %u frames each, %uHz to %uHz\n",
-           steps, frames, SWEEP_MIN_HZ, SWEEP_MAX_HZ);
-
-    sweep_build_table(steps);
-    opl_freq_to_block_fnum(REFERENCE_HZ, &ref_block, &ref_fnum);
+           (unsigned)SWEEP_STEPS, frames, SWEEP_MIN_HZ, SWEEP_MAX_HZ);
 
     pulse_prepare(channel);
 
@@ -200,7 +167,7 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps) {
     if (aborted)
         return end_sequence(channel, total_frames);
 
-    total_frames += run_sweep(channel, frames, steps);
+    total_frames += run_sweep(channel, frames);
     if (aborted)
         return end_sequence(channel, total_frames);
 

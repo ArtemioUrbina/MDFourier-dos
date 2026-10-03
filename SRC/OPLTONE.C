@@ -25,7 +25,7 @@ static uint8_t b0_shadow[9];
 
 
 /*
- * Fnum = freq * 2^(20-Block) / 49716, lowest Block with Fnum <= 1023.
+ * Fnum = freq * 2^(20-Block) / 49716, rounded, lowest Block with Fnum <= 1023.
  *
  * 32-bit only
  * freq << (20-b) can overflow 32 bits for low blocks,
@@ -33,7 +33,9 @@ static uint8_t b0_shadow[9];
  * block is range-checked before shifting:
  *
  */
-#define OPL_FNUM_LIMIT (1024UL * 49716UL - 1UL)   /* 50,909,183 */
+#define OPL_BASE_HZ    49716UL
+/* largest freq << (20-b) that still rounds to Fnum <= 1023 */
+#define OPL_FNUM_LIMIT (1024UL * OPL_BASE_HZ - OPL_BASE_HZ / 2 - 1UL)
 
 void opl_freq_to_block_fnum(unsigned freq_hz, uint8_t *block, uint16_t *fnum)
 {
@@ -51,7 +53,8 @@ void opl_freq_to_block_fnum(unsigned freq_hz, uint8_t *block, uint16_t *fnum)
     }
 
     *block = b;
-    *fnum  = (uint16_t)(((uint32_t)freq_hz << (20 - b)) / 49716UL);
+    *fnum  = (uint16_t)((((uint32_t)freq_hz << (20 - b)) + OPL_BASE_HZ / 2)
+                        / OPL_BASE_HZ);
 }
 
 static uint8_t make_b0(uint8_t block, uint16_t fnum)

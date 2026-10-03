@@ -4,6 +4,6 @@
 #include <stdint.h>
 #include "opltone.h"
 
-int mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps);
+int mdf_run_full_test(uint8_t channel, unsigned frames);
 
 #endif

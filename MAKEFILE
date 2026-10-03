@@ -12,7 +12,7 @@ CC = wcc
 # Objects depend on headers
 HDRS = include\carddrv.h include\env.h include\irq.h include\kbd.h &
        include\mdf.h include\opl.h include\opltone.h include\pit.h &
-       include\vsync.h
+       include\sweep.h include\vsync.h
 
 OBJS = build\main.obj build\env.obj build\kbd.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &

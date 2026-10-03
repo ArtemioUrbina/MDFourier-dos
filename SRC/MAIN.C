@@ -14,7 +14,6 @@
 #include "mdf.h"
 
 #define SWEEP_FRAMES 20
-#define SWEEP_STEPS  128
 
 /* Windows virtualizes VGA, PIT and interrupts, so we check
  * INT 2Fh AX=1600h for 00h or 80h in AL when it is not running */
@@ -56,7 +55,7 @@ int main() {
         opl_driver.init();
 
         printf("Playing MDFourier...\n");
-        mdf_run_full_test(0, SWEEP_FRAMES, SWEEP_STEPS);
+        mdf_run_full_test(0, SWEEP_FRAMES);
 
         /* silence the chip */
         opl_driver.reset();
