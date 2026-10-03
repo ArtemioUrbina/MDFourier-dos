@@ -44,21 +44,22 @@ static void pulse_prepare(uint8_t channel) {
     opl_note_set(channel, REF_BLOCK, REF_FNUM);
 }
 
-/* OPL3-SAx, OPL3-L, OPL4) run from ~49516 Hz instead of 49716 Hz,
+/* OPL3-SAx, OPL3-L, OPL4 run from ~49516 Hz instead of 49716 Hz,
  * so it plays ~24 Hz lower at 6 kHz.
  *
  * Source: https://nerdlypleasures.blogspot.com/2018/01/opl23-frequency-1hz-ish-difference.html
  *
- * Values measured with MDFourier from real hardware, using -j for 1hz alignment:
+ * Values measured with MDFourier from real hardware, using -j for 1/64 Hz FFT:
  * ========================================================================
  * Card                         Fm Chip     Chip ID Tone    Estimated Clock
  * ========================================================================
- * Soundblaster 2.0 CT1336A     OPL2        6002.3125Hz     49717.7547Hz
- * SoundBlaster 16  CT1740      OPL3        6003.2500Hz     49725.5201Hz
- * Yamaha Audician 32 Plus      OPL3-SAx    5978.3750Hz     49519.4780Hz
- * CompaqÿES1869ÿ               ESS ESFM    5991.0625Hz     49624.5698Hz
+ * Soundblaster 2.0 CT1336A     OPL2        6002.3125Hz     49717.8387Hz
+ * SoundBlaster 16  CT1740      OPL3        6003.2344Hz     49725.4747Hz
+ * Yamaha Audician 32 Plus      OPL3-SAx    5978.3594Hz     49519.4322Hz
+ * CompaqÿES1869ÿ               ESS ESFM    5991.0625Hz     49624.6537Hz
  * ========================================================================
  */
+
 static unsigned chip_id(uint8_t channel) {
     unsigned i;
 

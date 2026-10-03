@@ -85,7 +85,7 @@ int main() {
     printf(" *\n");
     printf(" * Reference tone: %g Hz requested, %.4f Hz played.\n", REF_HZ, rate_played);
     printf(" * Profile clock line:\n");
-    printf(" *   CLK y %d %.4f %.4f\n", CLK_ELEM, rate_played, ratio);
+    printf(" *   CLK y %d %.6f %.6f\n", CLK_ELEM, rate_played, ratio);
     printf(" */\n\n");
     printf("#ifndef SWEEP_H\n#define SWEEP_H\n\n");
     printf("#include <stdint.h>\n\n");
