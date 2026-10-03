@@ -18,6 +18,7 @@
 #define PULSE_COUNT  10
 #define SILENCE_FRAMES 20
 #define DECAY_FRAMES 5
+#define CHIPID_FRAMES 60
 
 #define MDF_MAX_STEPS 256
 
@@ -54,6 +55,33 @@ static uint16_t ref_fnum;
 static void pulse_prepare(uint8_t channel) {
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
     opl_note_set(channel, ref_block, ref_fnum);
+}
+
+/* OPL3-SAx, OPL3-L, OPL4) run from ~49516 Hz instead of 49716 Hz,
+ * so it plays ~24 Hz lower at 6 kHz.
+ *
+ * Source: nerdlypleasures.blogspot.com/2018/01/opl23-frequency-1hz-ish-difference.html
+ *
+ * Values measured with MDFourier from real hardware for testing with profile:
+ * CLK y 2 5996.0215 8.2915
+ * SB 2.0       5996.0000Hz     49715.8340Hz
+ * Auditian32   5972.0000Hz     49516.8380Hz
+ * ES1869       5985.0000Hz     49624.6275Hz
+ */
+static unsigned chip_id(uint8_t channel) {
+    unsigned i;
+
+    opl_key_on(channel);
+    for (i = 0; i < CHIPID_FRAMES; i++) {
+        if (check_abort()) {
+            opl_note_off(channel);
+            return i;
+        }
+        vsync_wait();
+    }
+    opl_note_off(channel);
+
+    return CHIPID_FRAMES;
 }
 
 /* Must be entered right after a vsync_wait(), with pulse_prepare()
@@ -154,6 +182,15 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, unsigned steps) {
 
     /* MDF Sequence */
     total_frames += pulse_train(channel);
+
+    silence(SILENCE_FRAMES);
+    total_frames += SILENCE_FRAMES;
+    if (aborted)
+        return end_sequence(channel, total_frames);
+
+    total_frames += chip_id(channel);
+    if (aborted)
+        return end_sequence(channel, total_frames);
 
     /* Silence, loading the sweep instrument one frame before it ends */
     silence(SILENCE_FRAMES - 1);
