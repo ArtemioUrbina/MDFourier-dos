@@ -49,14 +49,15 @@ static void pulse_prepare(uint8_t channel) {
  *
  * Source: https://nerdlypleasures.blogspot.com/2018/01/opl23-frequency-1hz-ish-difference.html
  *
- * Values measured with MDFourier from real hardware, using -j for 1/64 Hz FFT:
+ * Values measured with MDFourier from real hardware, using -j for 1/16 Hz FFT
+ * with peak interpolation (validated on a synthetic 6002.30 Hz tone):
  * ========================================================================
  * Card                         Fm Chip     Chip ID Tone    Estimated Clock
  * ========================================================================
- * Soundblaster 2.0 CT1336A     OPL2        6002.3125Hz     49717.8387Hz
- * SoundBlaster 16  CT1740      OPL3        6003.2344Hz     49725.4747Hz
- * Yamaha Audician 32 Plus      OPL3-SAx    5978.3594Hz     49519.4322Hz
- * CompaqÿES1869ÿ               ESS ESFM    5991.0625Hz     49624.6537Hz
+ * Soundblaster 2.0 CT1336A     OPL2        6002.3139Hz     49717.8503Hz
+ * SoundBlaster 16  CT1740      OPL3        6003.2374Hz     49725.4998Hz
+ * Yamaha Audician 32 Plus      OPL3-SAx    5978.3547Hz     49519.3938Hz
+ * CompaqÿES1869ÿ               ESS ESFM    5991.0690Hz     49624.7075Hz
  * ========================================================================
  */
 
