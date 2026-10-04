@@ -19,6 +19,7 @@
 
 /* ESC pressed */
 static int aborted;          
+static int stereo;
 
 static int check_abort() {
     if (!aborted && kbd_poll_escape())
@@ -40,6 +41,8 @@ static void silence(unsigned frames) {
  * Call at least one frame before pulse_train()
  */
 static void pulse_prepare(uint8_t channel) {
+    if (stereo)
+        opl_set_pan(channel, OPL_PAN_CENTER);
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
     opl_note_set(channel, REF_BLOCK, REF_FNUM);
 }
@@ -56,8 +59,8 @@ static void pulse_prepare(uint8_t channel) {
  * ========================================================================
  * Soundblaster 2.0 CT1336A     OPL2        6002.3139Hz     49717.8503Hz
  * SoundBlaster 16  CT1740      OPL3        6003.2374Hz     49725.4998Hz
- * Yamaha Audician 32 Plus      OPL3-SAx    5978.3547Hz     49519.3938Hz
- * CompaqÿES1869ÿ               ESS ESFM    5991.0690Hz     49624.7075Hz
+ * Yamaha Audician 32 Plus      OPL3-SAx    5978.3547Hz     49519.3937Hz
+ * CompaqÿES1869                ESS ESFM    5991.0690Hz     49624.7075Hz
  * ========================================================================
  */
 
@@ -93,8 +96,32 @@ static unsigned pulse_train(uint8_t channel) {
     return PULSE_COUNT * 2;
 }
 
-/* Must be entered right after a vsync_wait(), with the instrument
- * already loaded. */
+void sweep_prepare(uint8_t channel) {
+    if (stereo) {
+        opl_set_pan(channel, OPL_PAN_LEFT);
+        opl_set_pan(channel + 1, OPL_PAN_RIGHT);
+        opl_set_instrument(channel + 1, OPL_INSTRUMENT_DEFAULT);
+    }
+    opl_set_instrument(channel, OPL_INSTRUMENT_DEFAULT);
+}
+
+/* Left and right start one write apart */
+void sweep_note_on(uint8_t channel, unsigned step) {
+    if (stereo) {
+        opl_note_set(channel, sweep[step].block, sweep[step].fnum);
+        opl_note_set(channel + 1, sweep[step].block, sweep[step].fnum);
+        opl_key_on(channel);
+        opl_key_on(channel + 1);
+    } else
+        opl_note_on_raw(channel, sweep[step].block, sweep[step].fnum);
+}
+
+void sweep_note_off(uint8_t channel) {
+    opl_note_off(channel);
+    if (stereo)
+        opl_note_off(channel + 1);
+}
+
 static unsigned long run_sweep(uint8_t channel, unsigned frames) {
     unsigned step, frame, release_frame;
     unsigned long total_frames = 0;
@@ -102,17 +129,17 @@ static unsigned long run_sweep(uint8_t channel, unsigned frames) {
     release_frame = frames - frames / 5;
 
     for (step = 0; step < SWEEP_STEPS; step++) {
-        opl_note_on_raw(channel, sweep[step].block, sweep[step].fnum);
+        sweep_note_on(channel, step);
         for (frame = 0; frame < frames; frame++) {
             if (frame == release_frame)
-                opl_note_off(channel);
+                sweep_note_off(channel);
             if (check_abort())
                 return total_frames;
             vsync_wait();
         }
         total_frames += frames;
     }
-    opl_note_off(channel);
+    sweep_note_off(channel);
 
     return total_frames;
 }
@@ -121,7 +148,7 @@ static int end_sequence(uint8_t channel, unsigned long total_frames) {
     vsync_stats_t stats;
 
     vsync_end(&stats);
-    opl_note_off(channel);
+    sweep_note_off(channel);
 
     if (aborted) {
         printf("\nAborted\n");
@@ -133,8 +160,10 @@ static int end_sequence(uint8_t channel, unsigned long total_frames) {
     return aborted;
 }
 
-int mdf_run_full_test(uint8_t channel, unsigned frames) {
+int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo) {
     unsigned long total_frames = 0;
+
+    stereo = use_stereo;
 
     /* Everything slow here */
     printf("Frequency sweep: %u steps, %u frames each, %uHz to %uHz\n",
@@ -163,7 +192,7 @@ int mdf_run_full_test(uint8_t channel, unsigned frames) {
 
     /* Silence, loading the sweep instrument one frame before it ends */
     silence(SILENCE_FRAMES - 1);
-    opl_set_instrument(channel, OPL_INSTRUMENT_DEFAULT);
+    sweep_prepare(channel);
     silence(1);
     total_frames += SILENCE_FRAMES;
     if (aborted)

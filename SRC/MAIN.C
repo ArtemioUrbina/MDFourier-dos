@@ -28,6 +28,7 @@ static int windows_running() {
 int main() {
     blaster_cfg_t cfg;
     double        hz;
+    int           stereo;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
     if (env_get_blaster(&cfg))
@@ -54,8 +55,16 @@ int main() {
         printf("found (%s)\n", opl_is_opl3() ? "OPL3" : "OPL2");
         opl_driver.init();
 
+        /* OPL3 and compatibles */
+        stereo = opl_is_opl3();
+        if (stereo) {
+            opl3_set_new_mode(1);
+            printf("Stereo: FM sweep left on channel 0, right on channel 1\n");
+        } else
+            printf("Mono: OPL2\n");
+
         printf("Playing MDFourier...\n");
-        mdf_run_full_test(0, SWEEP_FRAMES);
+        mdf_run_full_test(0, SWEEP_FRAMES, stereo);
 
         /* silence the chip */
         opl_driver.reset();

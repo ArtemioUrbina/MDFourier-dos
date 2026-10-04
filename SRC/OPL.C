@@ -35,6 +35,12 @@ int opl_is_opl3(void)
     return opl3_found;
 }
 
+void opl3_set_new_mode(int on)
+{
+    if (opl3_found)
+        opl_write_bank1(0x05, on ? 0x01 : 0x00);
+}
+
 /*
  * AdLib timer test: start timer 1, wait for it
  * and check the status register flags

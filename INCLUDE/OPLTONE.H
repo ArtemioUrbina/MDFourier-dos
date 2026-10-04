@@ -29,5 +29,11 @@ void opl_note_set(uint8_t channel, uint8_t block, uint16_t fnum);
 void opl_key_on(uint8_t channel);
 void opl_note_off(uint8_t channel);
 
+#define OPL_PAN_LEFT    0x10
+#define OPL_PAN_RIGHT   0x20
+#define OPL_PAN_CENTER  (OPL_PAN_LEFT | OPL_PAN_RIGHT)
+
+void opl_set_pan(uint8_t channel, uint8_t pan);
+
 
 #endif

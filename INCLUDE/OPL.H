@@ -13,4 +13,7 @@ extern const uint16_t opl_port;
 void opl_write(uint8_t reg, uint8_t val);
 int opl_is_opl3();
 
+/* stereo panning (0xC0 bits 4-5) */
+void opl3_set_new_mode(int on);
+
 #endif

@@ -23,6 +23,17 @@ static const uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x1
  * keeps playing at the note's pitch. */
 static uint8_t b0_shadow[9];
 
+/* OPL3 NEW mode output bits for 0xC0, per channel */
+static uint8_t c0_pan[9];
+
+void opl_set_pan(uint8_t channel, uint8_t pan)
+{
+    if (channel > 8)
+        return;
+
+    c0_pan[channel] = pan;
+}
+
 
 /*
  * Fnum = freq * 2^(20-Block) / 49716, rounded, lowest Block with Fnum <= 1023.
@@ -139,7 +150,7 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
         opl_write((uint8_t)(0x60 + mod), 0x00); /* attack=0: never sounds */
         opl_write((uint8_t)(0x80 + mod), 0x0F);
         opl_write((uint8_t)(0xE0 + mod), 0x00);
-        opl_write((uint8_t)(0xC0 + channel), 0x00); /* FM, feedback=0 */
+        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x00); /* FM, feedback=0 */
     } else {
         opl_write((uint8_t)(0x80 + car), 0x08); /* sustain level=0, release=8 */
 
@@ -149,6 +160,6 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
         opl_write((uint8_t)(0x60 + mod), 0xF4); /* attack=15, decay=4 */
         opl_write((uint8_t)(0x80 + mod), 0x48); /* sustain=4, release=8 */
         opl_write((uint8_t)(0xE0 + mod), 0x00);
-        opl_write((uint8_t)(0xC0 + channel), 0x06); /* FM, feedback=3 */
+        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x06); /* FM, feedback=3 */
     }
 }

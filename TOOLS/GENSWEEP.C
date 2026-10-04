@@ -14,7 +14,7 @@
 #define MIN_HZ   20.0       /* first note */
 #define MAX_HZ   6200.0     /* last note, OPL tops out at 6209 Hz */
 #define REF_HZ   6000.0     /* sync pulses and chip ID tone */
-#define BASE_HZ  49716      /* OPL2/OPL3 sample rate: 3.579545 MHz / 72 */
+#define BASE_HZ  (3579545.0 / 72.0)  /* OPL2/OPL3 sample rate, 49715.9028 Hz */
 #define CLK_ELEM 2          /* CHIPID index in the MDF profile */
 
 /* rounding boundary */
@@ -33,7 +33,7 @@ int block_fnum(double freq, int *block, int *fnum) {
 
         if (fn <= 1023) {
             if (fabs(exact - floor(exact) - 0.5) < MARGIN) {
-                fprintf(stderr, "too close to ounding boundary: %.17g Hz\n", freq);
+                fprintf(stderr, "too close to rounding boundary: %.17g Hz\n", freq);
                 return 0;
             }
             if (fabs(exact - 1023.5) < MARGIN) {
@@ -50,7 +50,7 @@ int block_fnum(double freq, int *block, int *fnum) {
 }
 
 double played(int block, int fnum) {
-    return fnum * (double)BASE_HZ/pow(2.0, 20-block);
+    return fnum * BASE_HZ/pow(2.0, 20-block);
 }
 
 int main() {
@@ -62,7 +62,7 @@ int main() {
 
         freq[i] = MIN_HZ * pow(MAX_HZ/MIN_HZ, (double)i/(STEPS-1));
         if(!block_fnum(freq[i], &block[i], &fnum[i]))
-            return 0;
+            return 1;
         play[i] = played(block[i], fnum[i]);
         cents = fabs(1200.0*log2(play[i]/freq[i]));
         if (cents > worst)
@@ -70,7 +70,7 @@ int main() {
     }
 
     if(!block_fnum(REF_HZ, &rblock, &rfnum))
-        return 0;
+        return 1;
     rate_played = played(rblock, rfnum);
     ratio = pow(2.0, 20-rblock)/rfnum;
 
@@ -80,10 +80,10 @@ int main() {
     printf(" * Register values fixed and not computed to guarantee stability\n");
     printf(" *\n");
     printf(" * Sweep: f = %g * (%g/%g)^(i/%d), i = 0..%d\n", MIN_HZ, MAX_HZ, MIN_HZ, STEPS - 1, STEPS - 1);
-    printf(" *        Fnum = round(f * 2^(20-Block) / %d), lowest Block\n", BASE_HZ);
+    printf(" *        Fnum = round(f * 2^(20-Block) / %.4f), lowest Block\n", BASE_HZ);
     printf(" *        with Fnum <= 1023. Played within %.1f cents of f.\n", ceil(worst * 10.0) / 10.0);
     printf(" *\n");
-    printf(" * Reference tone: %g Hz requested, %.4f Hz played.\n", REF_HZ, rate_played);
+    printf(" * Reference tone: %g Hz requested, %.6f Hz played.\n", REF_HZ, rate_played);
     printf(" * Profile clock line:\n");
     printf(" *   CLK y %d %.6f %.6f\n", CLK_ELEM, rate_played, ratio);
     printf(" */\n\n");
