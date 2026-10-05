@@ -1,4 +1,4 @@
-# MDFourier for DOS — WIP
+# MDFourier for DOS WIP
 
 Currently working on a **16-bit DOS target build** for MDFourier. The decision was cut form 32 bit due to timing issues and aligning the pulses to 32 bits. It will refuse running under Windows, so run under pure DOS. Memory extenders are not an issue.
 
