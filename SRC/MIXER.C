@@ -26,6 +26,41 @@
 #define SB16_TREBLE 0x44        /* L, R at +1: bits 7-4, 8 = flat */
 #define SB16_BASS   0x46
 
+/* Mixer values */
+typedef struct {
+    uint8_t reg;
+    uint8_t mask;
+    uint8_t value;
+} mix_std_t;
+
+static const mix_std_t sb16_std[] = {
+    { SB16_MASTER,     0xF8, 0xF8 },    /* 0 dB */
+    { SB16_MASTER + 1, 0xF8, 0xF8 },
+    { SB16_FM,         0xF8, 0xF8 },
+    { SB16_FM + 1,     0xF8, 0xF8 },
+    { SB16_GAIN,       0xC0, 0x00 },    /* x1 */
+    { SB16_GAIN + 1,   0xC0, 0x00 },
+    { SB16_TREBLE,     0xF0, 0x80 },    /* flat */
+    { SB16_TREBLE + 1, 0xF0, 0x80 },
+    { SB16_BASS,       0xF0, 0x80 },
+    { SB16_BASS + 1,   0xF0, 0x80 },
+    { SB16_OUTSW,      0x1F, 0x00 }     /* no CD, line, mic */
+};
+
+static const mix_std_t sbpro_std[] = {
+    { SBP_MASTER,      0xEE, 0xEE },    /* max */
+    { SBP_FM,          0xEE, 0xEE },
+    { SBP_CD,          0xEE, 0x00 },    /* muted */
+    { SBP_LINE,        0xEE, 0x00 },
+    { SBP_MIC,         0x06, 0x00 }
+};
+
+/* Previous state, for mixer_restore() */
+static uint16_t         saved_base;
+static const mix_std_t *saved_std;
+static unsigned         saved_count;
+static uint8_t          saved_val[16];
+
 uint8_t mix_read(uint16_t base, uint8_t reg) {
     outp(base + MIX_INDEX, reg);
     return (uint8_t)inp(base + MIX_DATA);
@@ -53,7 +88,7 @@ int sb16_db(uint8_t val) {
     return 2 * ((val >> 3) - 31);
 }
 
-void report_sb16(uint16_t base) {
+int report_sb16(uint16_t base) {
     uint8_t mstl, mstr, fml, fmr, outsw, gl, gr, tl, tr, bl, br, mic;
     int warn = 0;
 
@@ -89,7 +124,7 @@ void report_sb16(uint16_t base) {
     /* All zero: real SB16 at minimum, or DOSBox, which starts them at
      * 0 and doesn't emulate tone controls. Can't tell which */
     if (!tl && !tr && !bl && !br) {
-        printf("  NOTE: treble/bass read 0: minimum on a real SB16, or DOSBox (not emulated)\n");
+        printf("  NOTE: treble/bass read 0. minimum on a SB16 or DOSBox\n");
         warn = 1;
     } else if (tl != 8 || tr != 8 || bl != 8 || br != 8) {
         printf("  WARNING: treble/bass not flat, alters the frequency response\n");
@@ -100,12 +135,15 @@ void report_sb16(uint16_t base) {
         printf("  WARNING: other inputs mixed into the output, adds noise\n");
         warn = 1;
     }
-    if (!warn)
-        printf("  Mixer OK for capture\n");
+    if (!warn) {
+        printf("Mixer: OK for capture\n");
+        return 1;
+    }
+    return 0;
 }
 
 /* Only tested in DosBox */
-void report_sbpro(uint16_t base) {
+int report_sbpro(uint16_t base) {
     uint8_t mst, fm, cd, line, mic;
     int warn = 0;
 
@@ -129,16 +167,19 @@ void report_sbpro(uint16_t base) {
         printf("  WARNING: CD, line or mic not muted, adds noise\n");
         warn = 1;
     }
-    if (!warn)
-        printf("  Mixer OK for capture\n");
+    if (!warn) {
+        printf("Mixer: OK for capture\n");
+        return 1;
+    }
+    return 0;
 }
 
-void mixer_report(blaster_cfg_t *cfg) {
+int mixer_report(blaster_cfg_t *cfg) {
     uint16_t base;
 
     if (cfg->port == -1 || cfg->type == -1) {
-        printf("Mixer: unknown (no BLASTER), check volumes manually\n");
-        return;
+        printf("Mixer: check volumes manually\n");
+        return -1;
     }
     base = (uint16_t)cfg->port;
 
@@ -146,22 +187,72 @@ void mixer_report(blaster_cfg_t *cfg) {
     case 1:
     case 3:
         printf("Mixer: none (SB 1.x/2.0), set the volume knob manually\n");
-        return;
+        return -1;
     case 2:
     case 4:
     case 5:
         if (mix_present(base, SBP_VOICE, 0xEE))
-            report_sbpro(base);
-        else
-            printf("Mixer: SB Pro expected, not answering\n");
-        return;
+            return(report_sbpro(base));
+        printf("Mixer: SB Pro expected, not answering\n");
+        return -1;
     case 6:
         if (mix_present(base, SB16_VOICE, 0xF8))
-            report_sb16(base);
-        else
-            printf("Mixer: SB16 expected, not answering\n");
-        return;
+            return(report_sb16(base));
+        printf("Mixer: SB16 expected, not answering\n");
+        return -1;
     default:
         printf("Mixer: unknown type T%d, check volumes manually\n", cfg->type);
     }
+    return -1;
+}
+
+/* Save, write and verify */
+static int mix_apply(uint16_t base, const mix_std_t *std, unsigned count) {
+    unsigned i;
+    int ok = 1;
+
+    saved_base  = base;
+    saved_std   = std;
+    saved_count = count;
+
+    for (i = 0; i < count; i++) {
+        saved_val[i] = mix_read(base, std[i].reg);
+        mix_write(base, std[i].reg,
+                  (uint8_t)((saved_val[i] & ~std[i].mask) | std[i].value));
+    }
+    for (i = 0; i < count; i++) {
+        if ((mix_read(base, std[i].reg) & std[i].mask) != std[i].value)
+            ok = 0;
+    }
+    return ok;
+}
+
+int mixer_set_standard(blaster_cfg_t *cfg) {
+    uint16_t base;
+
+    if (cfg->port == -1 || cfg->type == -1)
+        return -1;
+    base = (uint16_t)cfg->port;
+
+    switch (cfg->type) {
+    case 2:
+    case 4:
+    case 5:
+        if (!mix_present(base, SBP_VOICE, 0xEE))
+            return -1;
+        return mix_apply(base, sbpro_std, sizeof(sbpro_std) / sizeof(sbpro_std[0]));
+    case 6:
+        if (!mix_present(base, SB16_VOICE, 0xF8))
+            return -1;
+        return mix_apply(base, sb16_std, sizeof(sb16_std) / sizeof(sb16_std[0]));
+    }
+    return -1;
+}
+
+void mixer_restore() {
+    unsigned i;
+
+    for (i = 0; i < saved_count; i++)
+        mix_write(saved_base, saved_std[i].reg, saved_val[i]);
+    saved_count = 0;
 }

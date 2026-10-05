@@ -4,6 +4,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <i86.h>
 #include "carddrv.h"
 #include "env.h"
@@ -26,22 +27,51 @@ static int windows_running() {
     return reg.h.al != 0x00 && reg.h.al != 0x80;
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
     double        hz;
-    int           stereo;
+    int           stereo, i, set_mixer = 0;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
+
+    for (i = 1; i < argc; i++) {
+        if ((argv[i][0] == '/' || argv[i][0] == '-') &&
+            (argv[i][1] == 'M' || argv[i][1] == 'm') && !argv[i][2])
+            set_mixer = 1;
+        else {
+            printf("Usage: MDF [/M]\n"
+                   "  /M  set the mixer for capture, restored at exit\n");
+            return 0;
+        }
+    }
+
     if (env_get_blaster(&cfg))
         print_env(&cfg);
     else
         printf("BLASTER: not set\n");
-    mixer_report(&cfg);
 
     if (windows_running()) {
         printf("Running under Windows is not supported, exit Windows first\n");
         return 0;
     }
+
+    if (set_mixer) {
+        switch (mixer_set_standard(&cfg)) {
+        case 1:
+            printf("Mixer: levels changed, will restore at exit\n");
+            break;
+        case 0:
+            printf("Mixer: settings not accepted, set your mixer manually\n");
+            break;
+        default:
+            printf("Mixer: can't set this mixer, set it manually\n");
+        }
+
+        atexit(mixer_restore);
+    }
+
+    if(mixer_report(&cfg) == 0 && !set_mixer) 
+        printf("  NOTE: You can use /M to try to set proper mixer values.\n");
 
     pit_init();
 
@@ -49,12 +79,10 @@ int main() {
         printf("No usable vertical retrace (VGA required)\n");
         return 0;
     }
-    /* We don't print the preliminary for now */
-    /* printf("  Refresh: %0.4fHz (%0.4fms per frame)\n", hz, 1000.0/hz); */
 
     printf("Probing FM (%s)...", opl_driver.name);
     if(opl_driver.detect()) {
-        printf("found (%s) ", opl_is_opl3() ? "OPL3" : "OPL2");
+        printf("found (%s)\n", opl_is_opl3() ? "OPL3" : "OPL2");
         opl_driver.init();
 
         /* OPL3 and compatibles */
