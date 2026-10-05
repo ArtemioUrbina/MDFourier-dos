@@ -26,6 +26,15 @@ static uint8_t b0_shadow[9];
 /* OPL3 NEW mode output bits for 0xC0, per channel */
 static uint8_t c0_pan[9];
 
+/* Carrier frequency multiplier, MULT register code (1 = x1) */
+void opl_set_carrier_mult(uint8_t channel, uint8_t mult)
+{
+    if (channel > 8)
+        return;
+
+    opl_write((uint8_t)(0x20 + op_car[channel]), (uint8_t)(0x20 | (mult & 0x0F)));
+}
+
 void opl_set_pan(uint8_t channel, uint8_t pan)
 {
     if (channel > 8)

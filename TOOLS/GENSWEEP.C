@@ -13,6 +13,11 @@
 #define STEPS    128        /* sweep notes */
 #define MIN_HZ   20.0       /* first note */
 #define MAX_HZ   6200.0     /* last note, OPL tops out at 6209 Hz */
+
+/* Sine sweep with  MULT for frequencies above the 6209 Hz limit */
+#define SINE_STEPS  128
+#define SINE_MIN_HZ 20.0
+#define SINE_MAX_HZ 20000.0
 #define REF_HZ   6000.0     /* sync pulses and chip ID tone */
 #define BASE_HZ  (3579545.0 / 72.0)  /* OPL2/OPL3 sample rate, 49715.9028 Hz */
 #define CLK_ELEM 2          /* CHIPID index in the MDF profile */
@@ -53,9 +58,31 @@ double played(int block, int fnum) {
     return fnum * BASE_HZ/pow(2.0, 20-block);
 }
 
+/* Carrier MULT values and their register codes */
+static const int mult_value[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
+static const int mult_code[]  = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
+
+int sine_regs(double freq, int *block, int *fnum, int *code, double *play) {
+    int m;
+
+    for (m = 0; m < (int)(sizeof(mult_value)/sizeof(mult_value[0])); m++) {
+        if (freq / mult_value[m] <= MAX_HZ) {
+            if (!block_fnum(freq / mult_value[m], block, fnum))
+                return 0;
+            *code = mult_code[m];
+            *play = played(*block, *fnum) * mult_value[m];
+            return 1;
+        }
+    }
+    fprintf(stderr, "frequency above MULT range: %.17g Hz\n", freq);
+    return 0;
+}
+
 int main() {
     int    block[STEPS], fnum[STEPS], i, rblock, rfnum;
     double freq[STEPS], play[STEPS], worst = 0.0, rate_played, ratio;
+    int    sblock[SINE_STEPS], sfnum[SINE_STEPS], smult[SINE_STEPS];
+    double sfreq[SINE_STEPS], splay[SINE_STEPS], sworst = 0.0;
 
     for (i = 0; i < STEPS; i++) {
         double cents;
@@ -67,6 +94,17 @@ int main() {
         cents = fabs(1200.0*log2(play[i]/freq[i]));
         if (cents > worst)
             worst = cents;
+    }
+
+    for (i = 0; i < SINE_STEPS; i++) {
+        double cents;
+
+        sfreq[i] = SINE_MIN_HZ * pow(SINE_MAX_HZ/SINE_MIN_HZ, (double)i/(SINE_STEPS-1));
+        if(!sine_regs(sfreq[i], &sblock[i], &sfnum[i], &smult[i], &splay[i]))
+            return 1;
+        cents = fabs(1200.0*log2(splay[i]/sfreq[i]));
+        if (cents > sworst)
+            sworst = cents;
     }
 
     if(!block_fnum(REF_HZ, &rblock, &rfnum))
@@ -83,6 +121,10 @@ int main() {
     printf(" *        Fnum = round(f * 2^(20-Block) / %.4f), lowest Block\n", BASE_HZ);
     printf(" *        with Fnum <= 1023. Played within %.1f cents of f.\n", ceil(worst * 10.0) / 10.0);
     printf(" *\n");
+    printf(" * Sine sweep: f = %g * (%g/%g)^(i/%d), i = 0..%d\n", SINE_MIN_HZ, SINE_MAX_HZ, SINE_MIN_HZ, SINE_STEPS - 1, SINE_STEPS - 1);
+    printf(" *        carrier MULT: smallest that keeps f/MULT <= %g Hz,\n", MAX_HZ);
+    printf(" *        then Fnum as above. Played within %.1f cents of f.\n", ceil(sworst * 10.0) / 10.0);
+    printf(" *\n");
     printf(" * Reference tone: %g Hz requested, %.6f Hz played.\n", REF_HZ, rate_played);
     printf(" * Profile clock line:\n");
     printf(" *   CLK y %d %.6f %.6f\n", CLK_ELEM, rate_played, ratio);
@@ -90,19 +132,29 @@ int main() {
     printf("#ifndef SWEEP_H\n#define SWEEP_H\n\n");
     printf("#include <stdint.h>\n\n");
     printf("#define SWEEP_MIN_HZ %du\n", (int)MIN_HZ);
-    printf("#define SWEEP_MAX_HZ %du\n\n", (int)MAX_HZ);
+    printf("#define SWEEP_MAX_HZ %du\n", (int)MAX_HZ);
+    printf("#define SINE_MIN_HZ  %du\n", (int)SINE_MIN_HZ);
+    printf("#define SINE_MAX_HZ  %du\n\n", (int)SINE_MAX_HZ);
     printf("/* Sync pulses and chip ID tone */\n");
     printf("#define REF_BLOCK    %d\n", rblock);
     printf("#define REF_FNUM     %d\n\n", rfnum);
-    printf("static const struct {\n");
+    printf("typedef struct {\n");
     printf("    uint8_t  block;\n");
     printf("    uint16_t fnum;\n");
-    printf("} sweep[] = {\n");
+    printf("    uint8_t  mult;\n");
+    printf("} sweep_note_t;\n\n");
+    printf("const sweep_note_t sweep[] = {\n");
     for (i = 0; i < STEPS; i++)
-        printf("    { %d, %4d }%s  /* %3d: %8.2f Hz -> %8.2f Hz */\n",
+        printf("    { %d, %4d,  1 }%s  /* %3d: %8.2f Hz -> %8.2f Hz */\n",
                block[i], fnum[i], i < STEPS - 1 ? "," : " ", i, freq[i], play[i]);
     printf("};\n\n");
     printf("#define SWEEP_STEPS  (sizeof(sweep) / sizeof(sweep[0]))\n\n");
+    printf("const sweep_note_t sine_sweep[] = {\n");
+    for (i = 0; i < SINE_STEPS; i++)
+        printf("    { %d, %4d, %2d }%s  /* %3d: %8.2f Hz -> %8.2f Hz */\n",
+               sblock[i], sfnum[i], smult[i], i < SINE_STEPS - 1 ? "," : " ", i, sfreq[i], splay[i]);
+    printf("};\n\n");
+    printf("#define SINE_STEPS   (sizeof(sine_sweep) / sizeof(sine_sweep[0]))\n\n");
     printf("#endif\n");
 
     return 0;

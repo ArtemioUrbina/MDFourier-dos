@@ -7,6 +7,7 @@
 #include <i86.h>
 #include "carddrv.h"
 #include "env.h"
+#include "mixer.h"
 #include "opl.h"
 #include "pit.h"
 #include "vsync.h"
@@ -35,6 +36,7 @@ int main() {
         print_env(&cfg);
     else
         printf("BLASTER: not set\n");
+    mixer_report(&cfg);
 
     if (windows_running()) {
         printf("Running under Windows is not supported, exit Windows first\n");
@@ -52,16 +54,13 @@ int main() {
 
     printf("Probing FM (%s)...", opl_driver.name);
     if(opl_driver.detect()) {
-        printf("found (%s)\n", opl_is_opl3() ? "OPL3" : "OPL2");
+        printf("found (%s) ", opl_is_opl3() ? "OPL3" : "OPL2");
         opl_driver.init();
 
         /* OPL3 and compatibles */
         stereo = opl_is_opl3();
-        if (stereo) {
+        if (stereo)
             opl3_set_new_mode(1);
-            printf("Stereo: FM sweep left on channel 0, right on channel 1\n");
-        } else
-            printf("Mono: OPL2\n");
 
         printf("Playing MDFourier...\n");
         mdf_run_full_test(0, SWEEP_FRAMES, stereo);

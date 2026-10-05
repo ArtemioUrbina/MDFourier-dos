@@ -34,6 +34,7 @@ void opl_note_off(uint8_t channel);
 #define OPL_PAN_CENTER  (OPL_PAN_LEFT | OPL_PAN_RIGHT)
 
 void opl_set_pan(uint8_t channel, uint8_t pan);
+void opl_set_carrier_mult(uint8_t channel, uint8_t mult);
 
 
 #endif

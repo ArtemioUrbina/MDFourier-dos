@@ -16,6 +16,7 @@
 #define SILENCE_FRAMES 20
 #define DECAY_FRAMES 5
 #define CHIPID_FRAMES 60
+#define SINE_FRAMES  10
 
 /* ESC pressed */
 static int aborted;          
@@ -60,7 +61,7 @@ static void pulse_prepare(uint8_t channel) {
  * Soundblaster 2.0 CT1336A     OPL2        6002.3139Hz     49717.8503Hz
  * SoundBlaster 16  CT1740      OPL3        6003.2374Hz     49725.4998Hz
  * Yamaha Audician 32 Plus      OPL3-SAx    5978.3547Hz     49519.3937Hz
- * CompaqÿES1869                ESS ESFM    5991.0690Hz     49624.7075Hz
+ * Compaq ES1869                ESS ESFM    5991.0690Hz     49624.7075Hz
  * ========================================================================
  */
 
@@ -96,24 +97,29 @@ static unsigned pulse_train(uint8_t channel) {
     return PULSE_COUNT * 2;
 }
 
-void sweep_prepare(uint8_t channel) {
+void sweep_prepare(uint8_t channel, opl_instrument_t instrument) {
     if (stereo) {
         opl_set_pan(channel, OPL_PAN_LEFT);
         opl_set_pan(channel + 1, OPL_PAN_RIGHT);
-        opl_set_instrument(channel + 1, OPL_INSTRUMENT_DEFAULT);
+        opl_set_instrument(channel + 1, instrument);
     }
-    opl_set_instrument(channel, OPL_INSTRUMENT_DEFAULT);
+    opl_set_instrument(channel, instrument);
 }
 
 /* Left and right start one write apart */
-void sweep_note_on(uint8_t channel, unsigned step) {
+void sweep_note_on(uint8_t channel, const sweep_note_t *n, int set_mult) {
+    if (set_mult) {
+        opl_set_carrier_mult(channel, n->mult);
+        if (stereo)
+            opl_set_carrier_mult(channel + 1, n->mult);
+    }
     if (stereo) {
-        opl_note_set(channel, sweep[step].block, sweep[step].fnum);
-        opl_note_set(channel + 1, sweep[step].block, sweep[step].fnum);
+        opl_note_set(channel, n->block, n->fnum);
+        opl_note_set(channel + 1, n->block, n->fnum);
         opl_key_on(channel);
         opl_key_on(channel + 1);
     } else
-        opl_note_on_raw(channel, sweep[step].block, sweep[step].fnum);
+        opl_note_on_raw(channel, n->block, n->fnum);
 }
 
 void sweep_note_off(uint8_t channel) {
@@ -122,14 +128,14 @@ void sweep_note_off(uint8_t channel) {
         opl_note_off(channel + 1);
 }
 
-static unsigned long run_sweep(uint8_t channel, unsigned frames) {
+unsigned long run_sweep(uint8_t channel, unsigned frames, const sweep_note_t *notes, unsigned steps, int set_mult) {
     unsigned step, frame, release_frame;
     unsigned long total_frames = 0;
 
     release_frame = frames - frames / 5;
 
-    for (step = 0; step < SWEEP_STEPS; step++) {
-        sweep_note_on(channel, step);
+    for (step = 0; step < steps; step++) {
+        sweep_note_on(channel, &notes[step], set_mult);
         for (frame = 0; frame < frames; frame++) {
             if (frame == release_frame)
                 sweep_note_off(channel);
@@ -165,10 +171,6 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo) {
 
     stereo = use_stereo;
 
-    /* Everything slow here */
-    printf("Frequency sweep: %u steps, %u frames each, %uHz to %uHz\n",
-           (unsigned)SWEEP_STEPS, frames, SWEEP_MIN_HZ, SWEEP_MAX_HZ);
-
     pulse_prepare(channel);
 
     aborted = 0;
@@ -192,13 +194,30 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo) {
 
     /* Silence, loading the sweep instrument one frame before it ends */
     silence(SILENCE_FRAMES - 1);
-    sweep_prepare(channel);
+    sweep_prepare(channel, OPL_INSTRUMENT_DEFAULT);
     silence(1);
     total_frames += SILENCE_FRAMES;
     if (aborted)
         return end_sequence(channel, total_frames);
 
-    total_frames += run_sweep(channel, frames);
+    total_frames += run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);
+    if (aborted)
+        return end_sequence(channel, total_frames);
+
+    /* Decay */
+    silence(DECAY_FRAMES);
+    total_frames += DECAY_FRAMES;
+
+    /* Silence, loading the sine instrument one frame before it ends */
+    silence(SILENCE_FRAMES - 1);
+    sweep_prepare(channel, OPL_INSTRUMENT_SINE);
+    silence(1);
+    total_frames += SILENCE_FRAMES;
+    if (aborted)
+        return end_sequence(channel, total_frames);
+
+    /* Sine sweep up to 20 kHz */
+    total_frames += run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
     if (aborted)
         return end_sequence(channel, total_frames);
 
