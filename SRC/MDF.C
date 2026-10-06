@@ -58,7 +58,7 @@ static void pulse_prepare(uint8_t channel) {
  * ========================================================================
  * Card                         Fm Chip     Chip ID Tone    Estimated Clock
  * ========================================================================
- * Soundblaster 2.0 CT1336A     OPL2        6002.3139Hz     49717.8503Hz
+ * Soundblaster 2.0 CT1350B     OPL2        6002.3139Hz     49717.8503Hz
  * SoundBlaster 16  CT1740      OPL3        6003.2374Hz     49725.4998Hz
  * Yamaha Audician 32 Plus      OPL3-SAx    5978.3547Hz     49519.3937Hz
  * Compaq ES1869                ESS ESFM    5991.0690Hz     49624.7075Hz

@@ -30,17 +30,18 @@ static int windows_running() {
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
     double        hz;
-    int           stereo, i, set_mixer = 0;
+    int           stereo, i, set_mixer = 1;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
 
     for (i = 1; i < argc; i++) {
         if ((argv[i][0] == '/' || argv[i][0] == '-') &&
-            (argv[i][1] == 'M' || argv[i][1] == 'm') && !argv[i][2])
-            set_mixer = 1;
+            (argv[i][1] == 'K' || argv[i][1] == 'k') && !argv[i][2])
+            set_mixer = 0;
         else {
-            printf("Usage: MDF [/M]\n"
-                   "  /M  set the mixer for capture, restored at exit\n");
+            printf("Usage: MDF [/K]\n"
+                   "  The mixer is set for capture and restored at exit\n"
+                   "  /K  keep the current mixer settings\n");
             return 0;
         }
     }
@@ -56,22 +57,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (set_mixer) {
-        switch (mixer_set_standard(&cfg)) {
-        case 1:
-            printf("Mixer: levels changed, will restore at exit\n");
-            break;
-        case 0:
+        if(mixer_set_standard(&cfg))
+            printf("Mixer: levels changed for capture, will restore at exit\n");
+        else
             printf("Mixer: settings not accepted, set your mixer manually\n");
-            break;
-        default:
-            printf("Mixer: can't set this mixer, set it manually\n");
-        }
-
         atexit(mixer_restore);
     }
 
-    if(mixer_report(&cfg) == 0 && !set_mixer) 
-        printf("  NOTE: You can use /M to try to set proper mixer values.\n");
+    if(mixer_report(&cfg) == 0 && !set_mixer)
+        printf("  NOTE: kept by /K, run without it to set the mixer for capture\n");
 
     pit_init();
 

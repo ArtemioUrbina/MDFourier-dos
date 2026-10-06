@@ -18,7 +18,7 @@ The values below were measured with MDFourier on real hardware, using `-j` for a
 
 | Card | FM Chip | Tone | Estimated Clock |
 |---|---|---:|---:|
-| Sound Blaster 2.0 CT1336A | OPL2 | 6002.3139 Hz | 49717.8503 Hz |
+| Sound Blaster 2.0 CT1350B | OPL2 | 6002.3139 Hz | 49717.8503 Hz |
 | Sound Blaster 16 CT1740 | OPL3 | 6003.2374 Hz | 49725.4998 Hz |
 | Yamaha Audician 32 Plus | OPL3-SAx | 5978.3547 Hz | 49519.3937 Hz |
 | Compaq ES1869 | ESS ESFM | 5991.0690 Hz | 49624.7075 Hz |

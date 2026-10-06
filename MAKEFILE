@@ -23,9 +23,9 @@ OBJS = build\main.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj 
 # -ms           small memory model (64K code + 64K data)
 # -0            8086/8088 instructions only
 # -fpi          uses an 8087 if present, software emulation if not
-# -d2           full debug info (drop for release builds later)
+# -d2           full debug info
 # -i=include    include header files
-CFLAGS = -q -bt=dos -ms -0 -fpi -d2 -i=include
+CFLAGS = -q -bt=dos -ms -0 -fpi -i=include
 
 
 
