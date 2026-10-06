@@ -35,6 +35,32 @@ void opl_set_carrier_mult(uint8_t channel, uint8_t mult)
     opl_write((uint8_t)(0x20 + op_car[channel]), (uint8_t)(0x20 | (mult & 0x0F)));
 }
 
+/* Above 63 the modulator is off.
+ * TL=63 modulates (-47 dB), attack=0 keeps its envelope silent instead */
+void opl_set_mod_level(uint8_t channel, uint8_t level)
+{
+    if (channel > 8)
+        return;
+
+    if (level > 63) {
+        opl_write((uint8_t)(0x40 + op_mod[channel]), 0x3F);
+        opl_write((uint8_t)(0x60 + op_mod[channel]), 0x00);
+    } else {
+        opl_write((uint8_t)(0x40 + op_mod[channel]), level);
+        opl_write((uint8_t)(0x60 + op_mod[channel]), 0xF0);
+    }
+}
+
+/* Modulator is the output */
+void opl_set_feedback(uint8_t channel, uint8_t feedback)
+{
+    if (channel > 8)
+        return;
+
+    opl_write((uint8_t)(0xC0 + channel),
+              (uint8_t)(c0_pan[channel] | ((feedback & 0x07) << 1) | 0x01));
+}
+
 void opl_set_pan(uint8_t channel, uint8_t pan)
 {
     if (channel > 8)
@@ -149,7 +175,29 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
     opl_write((uint8_t)(0x60 + car), 0xF0); /* attack=15, decay=0 */
     opl_write((uint8_t)(0xE0 + car), 0x00); /* waveform=sine */
 
-    if (instrument == OPL_INSTRUMENT_SINE) {
+    if (instrument == OPL_INSTRUMENT_FM_DEPTH) {
+        /* No decay, fast release */
+        opl_write((uint8_t)(0x80 + car), 0x0F); /* sustain level=0, release=15 */
+
+        opl_write((uint8_t)(0x20 + mod), 0x21); /* sustain-enable, multiple=1 */
+        opl_write((uint8_t)(0x40 + mod), 0x3F); /* no modulation until set */
+        opl_write((uint8_t)(0x60 + mod), 0xF0); /* attack=15, decay=0 */
+        opl_write((uint8_t)(0x80 + mod), 0x0F);
+        opl_write((uint8_t)(0xE0 + mod), 0x00);
+        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x00); /* FM, feedback=0 */
+    } else if (instrument == OPL_INSTRUMENT_FEEDBACK) {
+        /* Modulator at full level */
+        opl_write((uint8_t)(0x40 + car), 0x3F);
+        opl_write((uint8_t)(0x60 + car), 0x00);
+        opl_write((uint8_t)(0x80 + car), 0x0F);
+
+        opl_write((uint8_t)(0x20 + mod), 0x21);
+        opl_write((uint8_t)(0x40 + mod), 0x00); /* TL=0, full level */
+        opl_write((uint8_t)(0x60 + mod), 0xF0);
+        opl_write((uint8_t)(0x80 + mod), 0x0F);
+        opl_write((uint8_t)(0xE0 + mod), 0x00);
+        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x01); /* additive, feedback=0 */
+    } else if (instrument == OPL_INSTRUMENT_SINE) {
         /* Release=15 (fastest) */
         opl_write((uint8_t)(0x80 + car), 0x0F); /* sustain level=0, release=15 */
 

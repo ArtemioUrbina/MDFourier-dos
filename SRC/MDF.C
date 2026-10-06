@@ -12,15 +12,21 @@
  *
  */
 
-#define PULSE_COUNT  10
-#define SILENCE_FRAMES 20
-#define DECAY_FRAMES 5
-#define CHIPID_FRAMES 60
-#define SINE_FRAMES  10
+#define PULSE_COUNT     10
+#define SILENCE_FRAMES  20
+#define DECAY_FRAMES    5
+#define CHIPID_FRAMES   60
+#define WM_FRAMES       10
+#define SINE_FRAMES     10
+#define STEP_FRAMES     20
 
 /* ESC pressed */
-static int aborted;          
+static int aborted;
 static int stereo;
+
+/* Frames the blocks are meant to play, each adds its own length.
+ * Checked against the frames vsync actually counted */
+static unsigned long seq_frames;
 
 static int check_abort() {
     if (!aborted && kbd_poll_escape())
@@ -28,20 +34,23 @@ static int check_abort() {
     return aborted;
 }
 
-static void silence(unsigned frames) {
-    unsigned i;
+static int next_frame() {
+    if (check_abort())
+        return 0;
+    vsync_wait();
+    return 1;
+}
 
-    for (i = 0; i < frames; i++) {
-        if (check_abort())
-            return;
-        vsync_wait();
-    }
+void silence(unsigned frames) {
+    seq_frames += frames;
+    while (frames-- && next_frame())
+        ;
 }
 
 /* Load the SINE instrument and the reference frequency
  * Call at least one frame before pulse_train()
  */
-static void pulse_prepare(uint8_t channel) {
+void pulse_prepare(uint8_t channel) {
     if (stereo)
         opl_set_pan(channel, OPL_PAN_CENTER);
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
@@ -65,36 +74,33 @@ static void pulse_prepare(uint8_t channel) {
  * ========================================================================
  */
 
-static unsigned chip_id(uint8_t channel) {
-    unsigned i;
+void tone_hold(uint8_t channel, unsigned frames) {
+    if (aborted)
+        return;
 
+    seq_frames += frames;
     opl_key_on(channel);
-    for (i = 0; i < CHIPID_FRAMES; i++) {
-        if (check_abort()) {
-            opl_note_off(channel);
-            return i;
-        }
-        vsync_wait();
-    }
+    while (frames-- && next_frame())
+        ;
     opl_note_off(channel);
-
-    return CHIPID_FRAMES;
 }
 
 /* Must be entered right after a vsync_wait(), with pulse_prepare()
  * already done.
  */
-static unsigned pulse_train(uint8_t channel) {
+void pulse_train(uint8_t channel) {
     int i;
 
+    if (aborted)
+        return;
+
+    seq_frames += PULSE_COUNT * 2;
     for (i = 0; i < PULSE_COUNT; i++) {
         opl_key_on(channel);
         vsync_wait();
         opl_note_off(channel);
         vsync_wait();
     }
-
-    return PULSE_COUNT * 2;
 }
 
 void sweep_prepare(uint8_t channel, opl_instrument_t instrument) {
@@ -128,30 +134,106 @@ void sweep_note_off(uint8_t channel) {
         opl_note_off(channel + 1);
 }
 
-unsigned long run_sweep(uint8_t channel, unsigned frames, const sweep_note_t *notes, unsigned steps, int set_mult) {
-    unsigned step, frame, release_frame;
-    unsigned long total_frames = 0;
+/* A note already keyed on. Key-off at 80%, the rest is its release */
+void note_frames(uint8_t channel, unsigned frames) {
+    unsigned frame, release_frame;
 
+    seq_frames += frames;
     release_frame = frames - frames / 5;
-
-    for (step = 0; step < steps; step++) {
-        sweep_note_on(channel, &notes[step], set_mult);
-        for (frame = 0; frame < frames; frame++) {
-            if (frame == release_frame)
-                sweep_note_off(channel);
-            if (check_abort())
-                return total_frames;
-            vsync_wait();
-        }
-        total_frames += frames;
+    for (frame = 0; frame < frames; frame++) {
+        if (frame == release_frame)
+            sweep_note_off(channel);
+        if (!next_frame())
+            return;
     }
-    sweep_note_off(channel);
-
-    return total_frames;
 }
 
-static int end_sequence(uint8_t channel, unsigned long total_frames) {
+void run_sweep(uint8_t channel, unsigned frames, const sweep_note_t *notes, unsigned steps, int set_mult) {
+    unsigned step;
+
+    for (step = 0; step < steps && !aborted; step++) {
+        sweep_note_on(channel, &notes[step], set_mult);
+        note_frames(channel, frames);
+    }
+    sweep_note_off(channel);
+}
+
+/* Modulator levels for the FM depth block: off (pure sine) to full */
+static const uint8_t depth_level[] = { OPL_MOD_OFF, 48, 40, 32, 24, 16, 8, 0 };
+#define DEPTH_STEPS (sizeof(depth_level) / sizeof(depth_level[0]))
+#define FEEDBACK_STEPS 8
+
+/* The 440 Hz tone, held once per step, a parameter changed before
+ * each key-on: modulator level (FM depth) or feedback.
+ * Must be entered right after a vsync_wait(), instrument loaded */
+void run_steps(uint8_t channel, unsigned steps, int feedback) {
+    static const sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
+    unsigned step;
+
+    for (step = 0; step < steps && !aborted; step++) {
+        if (feedback) {
+            opl_set_feedback(channel, (uint8_t)step);
+            if (stereo)
+                opl_set_feedback(channel + 1, (uint8_t)step);
+        } else {
+            opl_set_mod_level(channel, depth_level[step]);
+            if (stereo)
+                opl_set_mod_level(channel + 1, depth_level[step]);
+        }
+        sweep_note_on(channel, &tone, 0);
+        note_frames(channel, STEP_FRAMES);
+    }
+    sweep_note_off(channel);
+}
+
+/* What a silence loads in its last frame, so the next block's first
+ * key-on lands right on a frame edge */
+typedef enum {
+    PREP_NONE,
+    PREP_PULSES,        /* SINE, reference note, centered */
+    PREP_WM_OK,         /* watermark note: mixer verified */
+    PREP_WM_BAD,        /* watermark note: mixer not verified */
+    PREP_FM,            /* sweep instruments, left/right in stereo */
+    PREP_SINE,
+    PREP_DEPTH,
+    PREP_FEEDBACK
+} prep_t;
+
+void gap(uint8_t channel, unsigned frames, prep_t prep) {
+    silence(frames - 1);
+    if (aborted)
+        prep = PREP_NONE;
+    switch (prep) {
+        case PREP_PULSES:
+            pulse_prepare(channel);
+            break;
+        case PREP_WM_OK:
+            opl_note_set(channel, WM_OK_BLOCK, WM_OK_FNUM);
+            break;
+        case PREP_WM_BAD:
+            opl_note_set(channel, WM_BAD_BLOCK, WM_BAD_FNUM);
+            break;
+        case PREP_FM:
+            sweep_prepare(channel, OPL_INSTRUMENT_DEFAULT);
+            break;
+        case PREP_SINE:
+            sweep_prepare(channel, OPL_INSTRUMENT_SINE);
+            break;
+        case PREP_DEPTH:
+            sweep_prepare(channel, OPL_INSTRUMENT_FM_DEPTH);
+            break;
+        case PREP_FEEDBACK:
+            sweep_prepare(channel, OPL_INSTRUMENT_FEEDBACK);
+            break;
+        case PREP_NONE:
+            break;
+    }
+    silence(1);
+}
+
+int end_sequence(uint8_t channel) {
     vsync_stats_t stats;
+    unsigned long total_frames = seq_frames;
 
     vsync_end(&stats);
     sweep_note_off(channel);
@@ -166,74 +248,44 @@ static int end_sequence(uint8_t channel, unsigned long total_frames) {
     return aborted;
 }
 
-int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo) {
-    unsigned long total_frames = 0;
-
-    stereo = use_stereo;
+int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixer_ok) {
+    stereo     = use_stereo;
+    aborted    = 0;
+    seq_frames = 0;
 
     pulse_prepare(channel);
 
-    aborted = 0;
     kbd_poll_escape();
     printf("Press ESC to abort\n");
 
     /* Align the first key-on to a frame edge */
     vsync_begin();
 
-    /* MDF Sequence */
-    total_frames += pulse_train(channel);
+    /* MDF Sequence, block by block as in the profile */
+    pulse_train(channel);                                       /* Sync */
 
-    silence(SILENCE_FRAMES);
-    total_frames += SILENCE_FRAMES;
-    if (aborted)
-        return end_sequence(channel, total_frames);
+    gap(channel, SILENCE_FRAMES, PREP_NONE);
+    tone_hold(channel, CHIPID_FRAMES);                          /* CHIPID */
 
-    total_frames += chip_id(channel);
-    if (aborted)
-        return end_sequence(channel, total_frames);
+    gap(channel, SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
+    tone_hold(channel, WM_FRAMES);                              /* MIXER */
 
-    /* Silence, loading the sweep instrument one frame before it ends */
-    silence(SILENCE_FRAMES - 1);
-    sweep_prepare(channel, OPL_INSTRUMENT_DEFAULT);
-    silence(1);
-    total_frames += SILENCE_FRAMES;
-    if (aborted)
-        return end_sequence(channel, total_frames);
-
-    total_frames += run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);
-    if (aborted)
-        return end_sequence(channel, total_frames);
-
-    /* Decay */
+    gap(channel, SILENCE_FRAMES, PREP_FM);
+    run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);          /* FM */
     silence(DECAY_FRAMES);
-    total_frames += DECAY_FRAMES;
 
-    /* Silence, loading the sine instrument one frame before it ends */
-    silence(SILENCE_FRAMES - 1);
-    sweep_prepare(channel, OPL_INSTRUMENT_SINE);
-    silence(1);
-    total_frames += SILENCE_FRAMES;
-    if (aborted)
-        return end_sequence(channel, total_frames);
-
-    /* Sine sweep up to 20 kHz */
-    total_frames += run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
-    if (aborted)
-        return end_sequence(channel, total_frames);
-
-    /* Decay */
+    gap(channel, SILENCE_FRAMES, PREP_SINE);
+    run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1); /* SINE */
     silence(DECAY_FRAMES);
-    total_frames += DECAY_FRAMES;
 
-    /* Silence, preparing the end marker one frame before it ends */
-    silence(SILENCE_FRAMES - 1);
-    pulse_prepare(channel);
-    silence(1);
-    total_frames += SILENCE_FRAMES;
-    if (aborted)
-        return end_sequence(channel, total_frames);
+    gap(channel, SILENCE_FRAMES, PREP_DEPTH);
+    run_steps(channel, DEPTH_STEPS, 0);                         /* DEPTH */
 
-    total_frames += pulse_train(channel);
+    gap(channel, SILENCE_FRAMES, PREP_FEEDBACK);
+    run_steps(channel, FEEDBACK_STEPS, 1);                      /* FEEDBACK, FEEDBACK7 */
 
-    return end_sequence(channel, total_frames);
+    gap(channel, SILENCE_FRAMES, PREP_PULSES);
+    pulse_train(channel);                                       /* Sync */
+
+    return end_sequence(channel);
 }

@@ -12,6 +12,8 @@
  *        then Fnum as above. Played within 1.6 cents of f.
  *
  * Reference tone: 6000 Hz requested, 6002.078595 Hz played.
+ * FM depth and feedback tone: 440 Hz requested, 439.990595 Hz played.
+ * Mixer watermark: 1000 Hz OK, 2000 Hz not verified, played 999.84 / 1999.68 Hz.
  * Profile clock line:
  *   CLK y 2 6002.078595 8.283114
  */
@@ -29,6 +31,16 @@
 /* Sync pulses and chip ID tone */
 #define REF_BLOCK    7
 #define REF_FNUM     989
+
+/* FM depth and feedback blocks */
+#define TONE_BLOCK   4
+#define TONE_FNUM    580
+
+/* Mixer watermark: OK and not verified */
+#define WM_OK_BLOCK  5
+#define WM_OK_FNUM   659
+#define WM_BAD_BLOCK 6
+#define WM_BAD_FNUM  659
 
 typedef struct {
     uint8_t  block;

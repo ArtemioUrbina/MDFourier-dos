@@ -14,17 +14,15 @@
 
 typedef enum {
     OPL_INSTRUMENT_DEFAULT,
-    OPL_INSTRUMENT_SINE
+    OPL_INSTRUMENT_SINE,
+    OPL_INSTRUMENT_FM_DEPTH,    /* steady FM, depth set by opl_set_mod_level() */
+    OPL_INSTRUMENT_FEEDBACK     /* modulator alone, opl_set_feedback() */
 } opl_instrument_t;
 
 void opl_set_instrument(uint8_t channel, opl_instrument_t instrument);
-
 void opl_freq_to_block_fnum(unsigned freq_hz, uint8_t *block, uint16_t *fnum);
-
 void opl_note_on(uint8_t channel, unsigned freq_hz);
-
 void opl_note_on_raw(uint8_t channel, uint8_t block, uint16_t fnum);
-
 void opl_note_set(uint8_t channel, uint8_t block, uint16_t fnum);
 void opl_key_on(uint8_t channel);
 void opl_note_off(uint8_t channel);
@@ -33,7 +31,11 @@ void opl_note_off(uint8_t channel);
 #define OPL_PAN_RIGHT   0x20
 #define OPL_PAN_CENTER  (OPL_PAN_LEFT | OPL_PAN_RIGHT)
 
+#define OPL_MOD_OFF 64
+
 void opl_set_pan(uint8_t channel, uint8_t pan);
+void opl_set_mod_level(uint8_t channel, uint8_t level);
+void opl_set_feedback(uint8_t channel, uint8_t feedback);
 void opl_set_carrier_mult(uint8_t channel, uint8_t mult);
 
 

@@ -10,17 +10,20 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define STEPS    128        /* sweep notes */
+#define STEPS    128        /* FM sweep notes */
 #define MIN_HZ   20.0       /* first note */
 #define MAX_HZ   6200.0     /* last note, OPL tops out at 6209 Hz */
 
-/* Sine sweep with  MULT for frequencies above the 6209 Hz limit */
+/* Sine sweep with MULT for frequencies above the 6209 Hz limit */
 #define SINE_STEPS  128
 #define SINE_MIN_HZ 20.0
 #define SINE_MAX_HZ 20000.0
-#define REF_HZ   6000.0     /* sync pulses and chip ID tone */
+#define REF_HZ    6000.0             /* sync pulses and chip ID tone */
+#define TONE_HZ   440.0              /* FM depth and feedback blocks */
+#define WM_OK_HZ  1000.0             /* watermark: mixer in capture state */
+#define WM_BAD_HZ 2000.0             /* watermark: mixer not verified */
 #define BASE_HZ  (3579545.0 / 72.0)  /* OPL2/OPL3 sample rate, 49715.9028 Hz */
-#define CLK_ELEM 2          /* CHIPID index in the MDF profile */
+#define CLK_ELEM 2                   /* CHIPID index in the MDF profile */
 
 /* rounding boundary */
 #define MARGIN   1e-6
@@ -79,7 +82,8 @@ int sine_regs(double freq, int *block, int *fnum, int *code, double *play) {
 }
 
 int main() {
-    int    block[STEPS], fnum[STEPS], i, rblock, rfnum;
+    int    block[STEPS], fnum[STEPS], i, rblock, rfnum, tblock, tfnum;
+    int    okblock, okfnum, badblock, badfnum;
     double freq[STEPS], play[STEPS], worst = 0.0, rate_played, ratio;
     int    sblock[SINE_STEPS], sfnum[SINE_STEPS], smult[SINE_STEPS];
     double sfreq[SINE_STEPS], splay[SINE_STEPS], sworst = 0.0;
@@ -109,6 +113,11 @@ int main() {
 
     if(!block_fnum(REF_HZ, &rblock, &rfnum))
         return 1;
+    if(!block_fnum(TONE_HZ, &tblock, &tfnum))
+        return 1;
+    if(!block_fnum(WM_OK_HZ, &okblock, &okfnum) ||
+       !block_fnum(WM_BAD_HZ, &badblock, &badfnum))
+        return 1;
     rate_played = played(rblock, rfnum);
     ratio = pow(2.0, 20-rblock)/rfnum;
 
@@ -126,6 +135,10 @@ int main() {
     printf(" *        then Fnum as above. Played within %.1f cents of f.\n", ceil(sworst * 10.0) / 10.0);
     printf(" *\n");
     printf(" * Reference tone: %g Hz requested, %.6f Hz played.\n", REF_HZ, rate_played);
+    printf(" * FM depth and feedback tone: %g Hz requested, %.6f Hz played.\n",
+           TONE_HZ, played(tblock, tfnum));
+    printf(" * Mixer watermark: %g Hz OK, %g Hz not verified, played %.2f / %.2f Hz.\n",
+           WM_OK_HZ, WM_BAD_HZ, played(okblock, okfnum), played(badblock, badfnum));
     printf(" * Profile clock line:\n");
     printf(" *   CLK y %d %.6f %.6f\n", CLK_ELEM, rate_played, ratio);
     printf(" */\n\n");
@@ -138,6 +151,14 @@ int main() {
     printf("/* Sync pulses and chip ID tone */\n");
     printf("#define REF_BLOCK    %d\n", rblock);
     printf("#define REF_FNUM     %d\n\n", rfnum);
+    printf("/* FM depth and feedback blocks */\n");
+    printf("#define TONE_BLOCK   %d\n", tblock);
+    printf("#define TONE_FNUM    %d\n\n", tfnum);
+    printf("/* Mixer watermark: OK and not verified */\n");
+    printf("#define WM_OK_BLOCK  %d\n", okblock);
+    printf("#define WM_OK_FNUM   %d\n", okfnum);
+    printf("#define WM_BAD_BLOCK %d\n", badblock);
+    printf("#define WM_BAD_FNUM  %d\n\n", badfnum);
     printf("typedef struct {\n");
     printf("    uint8_t  block;\n");
     printf("    uint16_t fnum;\n");

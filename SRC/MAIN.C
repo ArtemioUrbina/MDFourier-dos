@@ -30,7 +30,7 @@ static int windows_running() {
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
     double        hz;
-    int           stereo, i, set_mixer = 1;
+    int           stereo, i, set_mixer = 1, mixer, mixer_ok;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
 
@@ -57,15 +57,24 @@ int main(int argc, char *argv[]) {
     }
 
     if (set_mixer) {
-        if(mixer_set_standard(&cfg))
-            printf("Mixer: levels changed for capture, will restore at exit\n");
-        else
-            printf("Mixer: settings not accepted, set your mixer manually\n");
-        atexit(mixer_restore);
+        int mixer_saved = mixer_set_standard(&cfg);
+        if(mixer_saved != -1) {
+            if(mixer_saved)
+                printf("Mixer: levels changed for capture, will restore at exit\n");
+            else
+                printf("Mixer: settings not accepted, set your mixer manually\n");
+            atexit(mixer_restore);
+        }
     }
 
-    if(mixer_report(&cfg) == 0 && !set_mixer)
+    mixer = mixer_report(&cfg);
+    if(mixer == MIXER_WARN && !set_mixer)
         printf("  NOTE: kept by /K, run without it to set the mixer for capture\n");
+
+    /* Recorded in the watermark tone. No mixer chip counts as valid */
+    mixer_ok = (mixer == MIXER_OK || mixer == MIXER_NONE);
+    if(!mixer_ok)
+        printf("Mixer: not verified, watermarking\n");
 
     pit_init();
 
@@ -85,7 +94,7 @@ int main(int argc, char *argv[]) {
             opl3_set_new_mode(1);
 
         printf("Playing MDFourier...\n");
-        mdf_run_full_test(0, SWEEP_FRAMES, stereo);
+        mdf_run_full_test(0, SWEEP_FRAMES, stereo, mixer_ok);
 
         /* silence the chip */
         opl_driver.reset();

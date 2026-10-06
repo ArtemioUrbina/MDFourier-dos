@@ -191,9 +191,9 @@ int report_sb16(uint16_t base) {
     }
     if (!warn) {
         printf("Mixer: OK for capture\n");
-        return 1;
+        return MIXER_OK;
     }
-    return 0;
+    return MIXER_WARN;
 }
 
 /* Only tested in DosBox */
@@ -223,9 +223,9 @@ int report_sbpro(uint16_t base) {
     }
     if (!warn) {
         printf("Mixer: OK for capture\n");
-        return 1;
+        return MIXER_OK;
     }
-    return 0;
+    return MIXER_WARN;
 }
 
 /* ESS extended registers, the SB Pro view hides mutes */
@@ -271,9 +271,9 @@ int report_ess(uint16_t base) {
     }
     if (!warn) {
         printf("Mixer: OK for capture\n");
-        return 1;
+        return MIXER_OK;
     }
-    return 0;
+    return MIXER_WARN;
 }
 
 int mixer_report(blaster_cfg_t *cfg) {
@@ -281,7 +281,7 @@ int mixer_report(blaster_cfg_t *cfg) {
 
     if (cfg->port == -1 || cfg->type == -1) {
         printf("Mixer: check volumes manually\n");
-        return -1;
+        return MIXER_UNKNOWN;
     }
     base = (uint16_t)cfg->port;
 
@@ -289,7 +289,7 @@ int mixer_report(blaster_cfg_t *cfg) {
     case 1:
     case 3:
         printf("Mixer: none (SB 1.x/2.0), set the volume knob manually\n");
-        return -1;
+        return MIXER_NONE;
     case 2:
     case 4:
     case 5:
@@ -298,17 +298,17 @@ int mixer_report(blaster_cfg_t *cfg) {
             return report_ess(base);
         if (mix_present(base, SBP_VOICE, 0xEE))
             return report_sbpro(base);
-        printf("Mixer: SB Pro expected, not answering\n");
-        return -1;
+        printf("Mixer: SB Pro expected, not answering (check BLASTER A and T)\n");
+        return MIXER_UNKNOWN;
     case 6:
         if (mix_present(base, SB16_VOICE, 0xF8))
             return(report_sb16(base));
-        printf("Mixer: SB16 expected, not answering\n");
-        return -1;
+        printf("Mixer: SB16 expected, not answering (check BLASTER A and T)\n");
+        return MIXER_UNKNOWN;
     default:
         printf("Mixer: unknown type T%d, check volumes manually\n", cfg->type);
     }
-    return -1;
+    return MIXER_UNKNOWN;
 }
 
 void mix_save(uint16_t base, const mix_std_t *std, unsigned count) {
