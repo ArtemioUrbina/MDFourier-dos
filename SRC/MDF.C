@@ -290,7 +290,9 @@ int end_sequence(uint8_t channel) {
         printf("\nSequence complete: %lu frames\n", total_frames);
 
     vsync_print_stats(&stats, total_frames);
-    return aborted;
+    if (aborted)
+        return MDF_ABORTED;
+    return stats.bad ? MDF_BAD_FRAMES : MDF_OK;
 }
 
 int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixer_ok) {

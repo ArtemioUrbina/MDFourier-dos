@@ -17,9 +17,18 @@
 
 #define SWEEP_FRAMES 20
 
+/* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
+#define EXIT_OK         0   /* sequence complete, capture usable */
+#define EXIT_USAGE      1   /* bad command line */
+#define EXIT_WINDOWS    2   /* running under Windows */
+#define EXIT_NO_VGA     3   /* no usable vertical retrace */
+#define EXIT_NO_FM      4   /* no OPL2/OPL3 at 0x388 */
+#define EXIT_ABORTED    5   /* ESC pressed */
+#define EXIT_BAD_FRAMES 6   /* complete, frames out of tolerance: discard */
+
 /* Windows virtualizes VGA, PIT and interrupts, so we check
  * INT 2Fh AX=1600h for 00h or 80h in AL when it is not running */
-static int windows_running() {
+int windows_running(void) {
     union REGS reg;
 
     reg.x.ax = 0x1600;
@@ -30,7 +39,7 @@ static int windows_running() {
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
     double        hz;
-    int           stereo, i, set_mixer = 1, mixer, mixer_ok;
+    int           stereo, i, set_mixer = 1, mixer, mixer_ok, result;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
 
@@ -42,7 +51,7 @@ int main(int argc, char *argv[]) {
             printf("Usage: MDF [/K]\n"
                    "  The mixer is set for capture and restored at exit\n"
                    "  /K  keep the current mixer settings\n");
-            return 0;
+            return EXIT_USAGE;
         }
     }
 
@@ -53,7 +62,7 @@ int main(int argc, char *argv[]) {
 
     if (windows_running()) {
         printf("Running under Windows is not supported, exit Windows first\n");
-        return 0;
+        return EXIT_WINDOWS;
     }
 
     if (set_mixer) {
@@ -80,7 +89,7 @@ int main(int argc, char *argv[]) {
 
     if (!vsync_calibrate(&hz)) {
         printf("No usable vertical retrace (VGA required)\n");
-        return 0;
+        return EXIT_NO_VGA;
     }
 
     printf("Probing FM (%s)...", opl_driver.name);
@@ -94,13 +103,19 @@ int main(int argc, char *argv[]) {
             opl3_set_new_mode(1);
 
         printf("Playing MDFourier...\n");
-        mdf_run_full_test(0, SWEEP_FRAMES, stereo, mixer_ok);
+        result = mdf_run_full_test(0, SWEEP_FRAMES, stereo, mixer_ok);
 
         /* silence the chip */
         opl_driver.reset();
 
-    } else
+    } else {
         printf("not found\n");
+        return EXIT_NO_FM;
+    }
 
-    return 0;
+    if (result == MDF_ABORTED)
+        return EXIT_ABORTED;
+    if (result == MDF_BAD_FRAMES)
+        return EXIT_BAD_FRAMES;
+    return EXIT_OK;
 }

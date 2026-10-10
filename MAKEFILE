@@ -3,7 +3,8 @@
 # 16-bit real mode DOS executable, small model, no DOS extender
 #
 # Usage:
-#   wmake            build mdf.exe
+#   wmake            build mdf.exe (release)
+#   wmake DEBUG=1    build with debug info (after wmake clean)
 #   wmake clean      remove build output
 
 BIN  = mdf.exe
@@ -26,6 +27,11 @@ OBJS = build\main.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj 
 # -d2           full debug info
 # -i=include    include header files
 CFLAGS = -q -bt=dos -ms -0 -fpi -i=include
+
+# wmake DEBUG=1 adds full debug info (-d2)
+!ifdef DEBUG
+CFLAGS += -d2
+!endif
 
 
 
