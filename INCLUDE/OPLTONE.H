@@ -27,16 +27,22 @@ void opl_note_set(uint8_t channel, uint8_t block, uint16_t fnum);
 void opl_key_on(uint8_t channel);
 void opl_note_off(uint8_t channel);
 
-#define OPL_PAN_LEFT    0x10
-#define OPL_PAN_RIGHT   0x20
-#define OPL_PAN_CENTER  (OPL_PAN_LEFT | OPL_PAN_RIGHT)
-
-#define OPL_MOD_OFF 64
+#define OPL_PAN_LEFT        0x10
+#define OPL_PAN_RIGHT       0x20
+#define OPL_PAN_CENTER      (OPL_PAN_LEFT | OPL_PAN_RIGHT)
+#define OPL_MOD_OFF         64
+#define OPL_LFO_AM          0x80
+#define OPL_LFO_VIB         0x40
+#define OPL_DEPTH_AM_DEEP   0x80
+#define OPL_DEPTH_VIB_DEEP  0x40
 
 void opl_set_pan(uint8_t channel, uint8_t pan);
 void opl_set_mod_level(uint8_t channel, uint8_t level);
 void opl_set_feedback(uint8_t channel, uint8_t feedback);
 void opl_set_carrier_mult(uint8_t channel, uint8_t mult);
+void opl_set_car_level(uint8_t channel, uint8_t level);
+void opl_set_car_lfo(uint8_t channel, uint8_t lfo);
+void opl_set_lfo_depth(uint8_t depth);
 
 
 #endif

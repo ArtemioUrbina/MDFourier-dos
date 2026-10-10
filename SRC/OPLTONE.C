@@ -61,6 +61,27 @@ void opl_set_feedback(uint8_t channel, uint8_t feedback)
               (uint8_t)(c0_pan[channel] | ((feedback & 0x07) << 1) | 0x01));
 }
 
+void opl_set_car_level(uint8_t channel, uint8_t level)
+{
+    if (channel > 8)
+        return;
+
+    opl_write((uint8_t)(0x40 + op_car[channel]), (uint8_t)(level & 0x3F));
+}
+
+void opl_set_car_lfo(uint8_t channel, uint8_t lfo)
+{
+    if (channel > 8)
+        return;
+
+    opl_write((uint8_t)(0x20 + op_car[channel]), (uint8_t)(0x21 | (lfo & 0xC0)));
+}
+
+void opl_set_lfo_depth(uint8_t depth)
+{
+    opl_write(0xBD, (uint8_t)(depth & 0xC0));
+}
+
 void opl_set_pan(uint8_t channel, uint8_t pan)
 {
     if (channel > 8)

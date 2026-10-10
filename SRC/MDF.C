@@ -19,22 +19,23 @@
 #define WM_FRAMES       10
 #define SINE_FRAMES     10
 #define STEP_FRAMES     20
+#define LFO_FRAMES      70
 
 /* ESC pressed */
-static int aborted;
-static int stereo;
+int aborted;
+int stereo;
 
 /* Frames the blocks are meant to play, each adds its own length.
  * Checked against the frames vsync actually counted */
-static unsigned long seq_frames;
+unsigned long seq_frames;
 
-static int check_abort() {
+int check_abort() {
     if (!aborted && kbd_poll_escape())
         aborted = 1;
     return aborted;
 }
 
-static int next_frame() {
+int next_frame() {
     if (check_abort())
         return 0;
     vsync_wait();
@@ -158,32 +159,76 @@ void run_sweep(uint8_t channel, unsigned frames, const sweep_note_t *notes, unsi
     sweep_note_off(channel);
 }
 
+#define COUNT(t) (sizeof(t) / sizeof(t[0]))
+
 /* Modulator levels for the FM depth block: off (pure sine) to full */
-static const uint8_t depth_level[] = { OPL_MOD_OFF, 48, 40, 32, 24, 16, 8, 0 };
-#define DEPTH_STEPS (sizeof(depth_level) / sizeof(depth_level[0]))
+uint8_t depth_level[] = { OPL_MOD_OFF, 48, 40, 32, 24, 16, 8, 0 };
+#define DEPTH_STEPS COUNT(depth_level)
 #define FEEDBACK_STEPS 8
+
+/* Carrier levels for the level staircase: 0 to -42 dB in 6 dB steps */
+uint8_t car_level[] = { 0, 8, 16, 24, 32, 40, 48, 56 };
+#define LEVEL_STEPS COUNT(car_level)
+
+/* Tremolo 1 and 4.8 dB, vibrato 7 and 14 cents */
+typedef struct {
+    uint8_t lfo;
+    uint8_t depth;
+} lft_st;
+
+lft_st lfo_step[] = {
+    { OPL_LFO_AM,  0 },
+    { OPL_LFO_AM,  OPL_DEPTH_AM_DEEP },
+    { OPL_LFO_VIB, 0 },
+    { OPL_LFO_VIB, OPL_DEPTH_VIB_DEEP }
+};
+
+#define LFO_STEPS COUNT(lfo_step)
+
+typedef enum {
+    STEPS_DEPTH,        /* FM_DEPTH instrument: modulator level */
+    STEPS_FEEDBACK,     /* FEEDBACK instrument: feedback 0-7 */
+    STEPS_LEVEL,        /* SINE instrument: carrier level */
+    STEPS_LFO           /* SINE instrument: tremolo, vibrato */
+} steps_t;
+
+void step_set(uint8_t channel, steps_t kind, unsigned step) {
+    switch (kind) {
+        case STEPS_DEPTH:
+            opl_set_mod_level(channel, depth_level[step]);
+            break;
+        case STEPS_FEEDBACK:
+            opl_set_feedback(channel, (uint8_t)step);
+            break;
+        case STEPS_LEVEL:
+            opl_set_car_level(channel, car_level[step]);
+            break;
+        case STEPS_LFO:
+            opl_set_car_lfo(channel, lfo_step[step].lfo);
+            break;
+    }
+}
 
 /* The 440 Hz tone, held once per step, a parameter changed before
  * each key-on: modulator level (FM depth) or feedback.
  * Must be entered right after a vsync_wait(), instrument loaded */
-void run_steps(uint8_t channel, unsigned steps, int feedback) {
-    static const sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
+void run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
+    const sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
     unsigned step;
 
     for (step = 0; step < steps && !aborted; step++) {
-        if (feedback) {
-            opl_set_feedback(channel, (uint8_t)step);
-            if (stereo)
-                opl_set_feedback(channel + 1, (uint8_t)step);
-        } else {
-            opl_set_mod_level(channel, depth_level[step]);
-            if (stereo)
-                opl_set_mod_level(channel + 1, depth_level[step]);
-        }
+        /* Global, shared by both channels */
+        if (kind == STEPS_LFO)
+            opl_set_lfo_depth(lfo_step[step].depth);
+        step_set(channel, kind, step);
+        if (stereo)
+            step_set(channel + 1, kind, step);
         sweep_note_on(channel, &tone, 0);
-        note_frames(channel, STEP_FRAMES);
+        note_frames(channel, frames);
     }
     sweep_note_off(channel);
+    if (kind == STEPS_LFO)
+        opl_set_lfo_depth(0);
 }
 
 /* What a silence loads in its last frame, so the next block's first
@@ -194,9 +239,9 @@ typedef enum {
     PREP_WM_OK,         /* watermark note: mixer verified */
     PREP_WM_BAD,        /* watermark note: mixer not verified */
     PREP_FM,            /* sweep instruments, left/right in stereo */
-    PREP_SINE,
-    PREP_DEPTH,
-    PREP_FEEDBACK
+    PREP_SINE,          /* sweep sine */
+    PREP_DEPTH,         /* LFO Depth  */
+    PREP_FEEDBACK       /* Feedback Steps */
 } prep_t;
 
 void gap(uint8_t channel, unsigned frames, prep_t prep) {
@@ -261,31 +306,48 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     /* Align the first key-on to a frame edge */
     vsync_begin();
 
-    /* MDF Sequence, block by block as in the profile */
-    pulse_train(channel);                                       /* Sync */
+    /* MDF Sequence */
 
+    /* Sync */
+    pulse_train(channel);                                       
+
+    /* CHIPID */
     gap(channel, SILENCE_FRAMES, PREP_NONE);
-    tone_hold(channel, CHIPID_FRAMES);                          /* CHIPID */
+    tone_hold(channel, CHIPID_FRAMES);                          
 
+    /* MIXER */
     gap(channel, SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
-    tone_hold(channel, WM_FRAMES);                              /* MIXER */
+    tone_hold(channel, WM_FRAMES);                              
 
+    /* FM */
     gap(channel, SILENCE_FRAMES, PREP_FM);
-    run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);          /* FM */
+    run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);          
     silence(DECAY_FRAMES);
 
+    /* SINE */
     gap(channel, SILENCE_FRAMES, PREP_SINE);
-    run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1); /* SINE */
+    run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
     silence(DECAY_FRAMES);
 
+    /* DEPTH */
     gap(channel, SILENCE_FRAMES, PREP_DEPTH);
-    run_steps(channel, DEPTH_STEPS, 0);                         /* DEPTH */
+    run_steps(channel, STEPS_DEPTH, DEPTH_STEPS, STEP_FRAMES);         
 
+    /* FEEDBACK, FEEDBACK7 */
     gap(channel, SILENCE_FRAMES, PREP_FEEDBACK);
-    run_steps(channel, FEEDBACK_STEPS, 1);                      /* FEEDBACK, FEEDBACK7 */
+    run_steps(channel, STEPS_FEEDBACK, FEEDBACK_STEPS, STEP_FRAMES);   
 
+    /* LEVEL */
+    gap(channel, SILENCE_FRAMES, PREP_SINE);
+    run_steps(channel, STEPS_LEVEL, LEVEL_STEPS, STEP_FRAMES);         
+
+    /* LFO */
+    gap(channel, SILENCE_FRAMES, PREP_SINE);
+    run_steps(channel, STEPS_LFO, LFO_STEPS, LFO_FRAMES);              
+
+    /* Sync */
     gap(channel, SILENCE_FRAMES, PREP_PULSES);
-    pulse_train(channel);                                       /* Sync */
+    pulse_train(channel);                                       
 
     return end_sequence(channel);
 }
