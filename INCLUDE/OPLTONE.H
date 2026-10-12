@@ -43,6 +43,6 @@ void opl_set_carrier_mult(uint8_t channel, uint8_t mult);
 void opl_set_car_level(uint8_t channel, uint8_t level);
 void opl_set_car_lfo(uint8_t channel, uint8_t lfo);
 void opl_set_lfo_depth(uint8_t depth);
-
+void opl_set_car_wave(uint8_t channel, uint8_t wave);
 
 #endif

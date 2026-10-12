@@ -19,7 +19,9 @@
 #define WM_FRAMES       10
 #define SINE_FRAMES     10
 #define STEP_FRAMES     20
-#define LFO_FRAMES      70
+/* The LFOs run freely and can't be reset. Compare as waveforms atm */
+#define TREMOLO_FRAMES  70
+#define VIBRATO_FRAMES  70
 
 /* ESC pressed */
 int aborted;
@@ -171,25 +173,22 @@ uint8_t car_level[] = { 0, 8, 16, 24, 32, 40, 48, 56 };
 #define LEVEL_STEPS COUNT(car_level)
 
 /* Tremolo 1 and 4.8 dB, vibrato 7 and 14 cents */
-typedef struct {
-    uint8_t lfo;
-    uint8_t depth;
-} lft_st;
+uint8_t tremolo_depth[] = { 0, OPL_DEPTH_AM_DEEP };
+uint8_t vibrato_depth[] = { 0, OPL_DEPTH_VIB_DEEP };
 
-lft_st lfo_step[] = {
-    { OPL_LFO_AM,  0 },
-    { OPL_LFO_AM,  OPL_DEPTH_AM_DEEP },
-    { OPL_LFO_VIB, 0 },
-    { OPL_LFO_VIB, OPL_DEPTH_VIB_DEEP }
-};
+#define TREMOLO_STEPS COUNT(tremolo_depth)
+#define VIBRATO_STEPS COUNT(vibrato_depth)
 
-#define LFO_STEPS COUNT(lfo_step)
+/* Carrier waveforms 0-7, OPL2 plays 4-7 as 0-3 */
+#define WAVE_STEPS 8
 
 typedef enum {
     STEPS_DEPTH,        /* FM_DEPTH instrument: modulator level */
     STEPS_FEEDBACK,     /* FEEDBACK instrument: feedback 0-7 */
     STEPS_LEVEL,        /* SINE instrument: carrier level */
-    STEPS_LFO           /* SINE instrument: tremolo, vibrato */
+    STEPS_TREMOLO,      /* SINE instrument: tremolo */
+    STEPS_VIBRATO,      /* SINE instrument: vibrato */
+    STEPS_WAVE          /* SINE instrument: carrier waveform */
 } steps_t;
 
 void step_set(uint8_t channel, steps_t kind, unsigned step) {
@@ -203,14 +202,21 @@ void step_set(uint8_t channel, steps_t kind, unsigned step) {
         case STEPS_LEVEL:
             opl_set_car_level(channel, car_level[step]);
             break;
-        case STEPS_LFO:
-            opl_set_car_lfo(channel, lfo_step[step].lfo);
+        case STEPS_TREMOLO:
+            opl_set_car_lfo(channel, OPL_LFO_AM);
+            break;
+        case STEPS_VIBRATO:
+            opl_set_car_lfo(channel, OPL_LFO_VIB);
+            break;
+        case STEPS_WAVE:
+            opl_set_car_wave(channel, (uint8_t)step);
             break;
     }
 }
 
 /* The 440 Hz tone, held once per step, a parameter changed before
- * each key-on: modulator level (FM depth) or feedback.
+ * each key-on: modulator level, feedback, carrier level, tremolo,
+ * vibrato or carrier waveform.
  * Must be entered right after a vsync_wait(), instrument loaded */
 void run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
     const sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
@@ -218,8 +224,10 @@ void run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
 
     for (step = 0; step < steps && !aborted; step++) {
         /* Global, shared by both channels */
-        if (kind == STEPS_LFO)
-            opl_set_lfo_depth(lfo_step[step].depth);
+        if (kind == STEPS_TREMOLO)
+            opl_set_lfo_depth(tremolo_depth[step]);
+        else if (kind == STEPS_VIBRATO)
+            opl_set_lfo_depth(vibrato_depth[step]);
         step_set(channel, kind, step);
         if (stereo)
             step_set(channel + 1, kind, step);
@@ -227,7 +235,7 @@ void run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
         note_frames(channel, frames);
     }
     sweep_note_off(channel);
-    if (kind == STEPS_LFO)
+    if (kind == STEPS_TREMOLO || kind == STEPS_VIBRATO)
         opl_set_lfo_depth(0);
 }
 
@@ -240,7 +248,7 @@ typedef enum {
     PREP_WM_BAD,        /* watermark note: mixer not verified */
     PREP_FM,            /* sweep instruments, left/right in stereo */
     PREP_SINE,          /* sweep sine */
-    PREP_DEPTH,         /* LFO Depth  */
+    PREP_DEPTH,         /* FM depth modulator level */
     PREP_FEEDBACK       /* Feedback Steps */
 } prep_t;
 
@@ -343,9 +351,14 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     gap(channel, SILENCE_FRAMES, PREP_SINE);
     run_steps(channel, STEPS_LEVEL, LEVEL_STEPS, STEP_FRAMES);         
 
-    /* LFO */
+    /* TREMOLO & VIBRATO with SINE instrument */
     gap(channel, SILENCE_FRAMES, PREP_SINE);
-    run_steps(channel, STEPS_LFO, LFO_STEPS, LFO_FRAMES);              
+    run_steps(channel, STEPS_TREMOLO, TREMOLO_STEPS, TREMOLO_FRAMES);
+    run_steps(channel, STEPS_VIBRATO, VIBRATO_STEPS, VIBRATO_FRAMES);
+
+    /* WAVE */
+    gap(channel, SILENCE_FRAMES, PREP_SINE);
+    run_steps(channel, STEPS_WAVE, WAVE_STEPS, STEP_FRAMES);
 
     /* Sync */
     gap(channel, SILENCE_FRAMES, PREP_PULSES);

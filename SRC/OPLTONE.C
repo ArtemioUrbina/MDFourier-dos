@@ -82,6 +82,14 @@ void opl_set_lfo_depth(uint8_t depth)
     opl_write(0xBD, (uint8_t)(depth & 0xC0));
 }
 
+void opl_set_car_wave(uint8_t channel, uint8_t wave)
+{
+    if (channel > 8)
+        return;
+
+    opl_write((uint8_t)(0xE0 + op_car[channel]), (uint8_t)(wave & 0x07));
+}
+
 void opl_set_pan(uint8_t channel, uint8_t pan)
 {
     if (channel > 8)

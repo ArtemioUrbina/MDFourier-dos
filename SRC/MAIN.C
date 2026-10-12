@@ -28,7 +28,7 @@
 
 /* Windows virtualizes VGA, PIT and interrupts, so we check
  * INT 2Fh AX=1600h for 00h or 80h in AL when it is not running */
-int windows_running(void) {
+int windows_running() {
     union REGS reg;
 
     reg.x.ax = 0x1600;
@@ -39,18 +39,24 @@ int windows_running(void) {
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
     double        hz;
-    int           stereo, i, set_mixer = 1, mixer, mixer_ok, result;
+    int           stereo, i, set_mixer = 1, report_only = 0, mixer, mixer_ok, result;
 
     printf("MDFourier DOS Artemio Urbina 2026\n");
 
     for (i = 1; i < argc; i++) {
-        if ((argv[i][0] == '/' || argv[i][0] == '-') &&
-            (argv[i][1] == 'K' || argv[i][1] == 'k') && !argv[i][2])
+        char opt = 0;
+
+        if ((argv[i][0] == '/' || argv[i][0] == '-') && argv[i][1] && !argv[i][2])
+            opt = argv[i][1];
+        if (opt == 'K' || opt == 'k')
             set_mixer = 0;
+        else if (opt == 'R' || opt == 'r')
+            report_only = 1;
         else {
-            printf("Usage: MDF [/K]\n"
+            printf("Usage: MDF [/K | /R]\n"
                    "  The mixer is set for capture and restored at exit\n"
-                   "  /K  keep the current mixer settings\n");
+                   "  /K  keep the current mixer settings\n"
+                   "  /R  print the current mixer settings and exit\n");
             return EXIT_USAGE;
         }
     }
@@ -63,6 +69,11 @@ int main(int argc, char *argv[]) {
     if (windows_running()) {
         printf("Running under Windows is not supported, exit Windows first\n");
         return EXIT_WINDOWS;
+    }
+
+    if (report_only) {
+        mixer_report(&cfg);
+        return EXIT_OK;
     }
 
     if (set_mixer) {

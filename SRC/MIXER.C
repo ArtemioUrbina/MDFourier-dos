@@ -301,6 +301,9 @@ int mixer_report(blaster_cfg_t *cfg) {
         printf("Mixer: SB Pro expected, not answering (check BLASTER A and T)\n");
         return MIXER_UNKNOWN;
     case 6:
+        /* ESS set up as T6 */
+        if (is_ess(base))
+            return report_ess(base);
         if (mix_present(base, SB16_VOICE, 0xF8))
             return(report_sb16(base));
         printf("Mixer: SB16 expected, not answering (check BLASTER A and T)\n");
@@ -346,18 +349,20 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
         return -1;
     base = (uint16_t)cfg->port;
 
+    /* ESS by ID */
+    if ((cfg->type == 2 || cfg->type == 4 || 
+    		cfg->type == 5 || cfg->type == 6) && is_ess(base)) {
+        mix_save(base, sbpro_std, COUNT(sbpro_std));
+        mix_save(base, ess_std, COUNT(ess_std));
+        ok = mix_set(base, sbpro_std, COUNT(sbpro_std));
+        ok &= mix_set(base, ess_std, COUNT(ess_std));
+        return ok;
+    }
+
     switch (cfg->type) {
     case 2:
     case 4:
     case 5:
-        if (is_ess(base)) {
-            /* Extended registers last */
-            mix_save(base, sbpro_std, COUNT(sbpro_std));
-            mix_save(base, ess_std, COUNT(ess_std));
-            ok = mix_set(base, sbpro_std, COUNT(sbpro_std));
-            ok &= mix_set(base, ess_std, COUNT(ess_std));
-            return ok;
-        }
         if (!mix_present(base, SBP_VOICE, 0xEE))
             return -1;
         mix_save(base, sbpro_std, COUNT(sbpro_std));

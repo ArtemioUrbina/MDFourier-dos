@@ -13,7 +13,7 @@
 
 #define KEY_ESC_ASCII   0x1B
 
-int kbd_poll_escape(void)
+int kbd_poll_escape()
 {
     unsigned flags;
     uint16_t head, tail, start, end;

@@ -30,7 +30,7 @@ static void opl_write_bank1(uint8_t reg, uint8_t val)
     opl_write_port((uint16_t)(opl_port + 2), reg, val);
 }
 
-int opl_is_opl3(void)
+int opl_is_opl3()
 {
     return opl3_found;
 }

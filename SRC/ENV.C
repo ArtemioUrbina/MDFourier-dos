@@ -7,8 +7,10 @@
 int parse_number(char *str, uint8_t base) {
     uint8_t  digit = 0;
     uint16_t value = 0;
+    int digits = 0;
+    int valid = 1;
 
-    while(*str) {
+    while(valid && *str) {
         if(*str >= '0' && *str <= '9')
             digit = *str - '0';
         else if(*str >= 'A' && *str <= 'F')
@@ -16,16 +18,17 @@ int parse_number(char *str, uint8_t base) {
         else if(*str >= 'a' && *str <= 'f')
             digit = *str - 'a' + 10;
         else
-            return value;
+            valid = 0;
 
-        if (digit >= base)
-            return value;
-
-        value = value * base + digit;
-        str ++;
+        if(valid && digit < base) {
+            value = value * base + digit;
+            digits++;
+            str++;
+        } else
+            valid = 0;
     }
 
-    return value;
+    return digits ? value : -1;
 }
 
 int env_get_blaster(blaster_cfg_t *cfg) {
