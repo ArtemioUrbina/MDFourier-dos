@@ -11,13 +11,13 @@ BIN  = mdf.exe
 CC = wcc
 
 # Objects depend on headers
-HDRS = include\carddrv.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h &
+HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h &
+       include\kbd.h include\mixer.h &
        include\mdf.h include\opl.h include\opltone.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
-       build\vsync.obj build\opltone.obj build\mdf.obj &
+OBJS = build\main.obj build\dsp.obj build\env.obj build\kbd.obj build\pit.obj &
+       build\mixer.obj build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
 # -bt=dos       target DOS
@@ -47,6 +47,9 @@ $(BIN): dirs $(OBJS)
 
 build\main.obj: src\main.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\main.c
+
+build\dsp.obj: src\dsp.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\dsp.c
 
 build\env.obj: src\env.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\env.c

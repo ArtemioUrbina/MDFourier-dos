@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <i86.h>
 #include "carddrv.h"
+#include "dsp.h"
 #include "env.h"
 #include "mixer.h"
 #include "opl.h"
@@ -97,6 +98,19 @@ int main(int argc, char *argv[]) {
         printf("Mixer: not verified, watermarking\n");
 
     pit_init();
+
+    /* Identify DSP */
+    if (cfg.port != -1) {
+        dsp_version_t ver;
+        uint16_t base = (uint16_t)cfg.port;
+
+        if (!dsp_reset(base))
+            printf("DSP: no answer at 0x%03X\n", base);
+        else if (!dsp_get_version(base, &ver))
+            printf("DSP: reset OK, no version\n");
+        else
+            printf("DSP: version %u.%02u\n", ver.major, ver.minor);
+    }
 
     if (!vsync_calibrate(&hz)) {
         printf("No usable vertical retrace (VGA required)\n");
