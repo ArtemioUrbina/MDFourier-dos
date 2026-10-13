@@ -3,6 +3,7 @@
 #include "vsync.h"
 #include "kbd.h"
 #include "sweep.h"
+#include "pcm.h"
 
 /*
  * TIMING
@@ -22,6 +23,12 @@
 /* The LFOs run freely and can't be reset. Compare as waveforms atm */
 #define TREMOLO_FRAMES  70
 #define VIBRATO_FRAMES  70
+#define PCMCLK_FRAMES   60
+#define PCMIDLE_FRAMES  20
+#define PCMSINE_FRAMES  10
+#define PCMLEVEL_FRAMES 20
+
+/* wmake QUICK=1 builds a short run with Sine and PCM only for testing */
 
 /* ESC pressed */
 int aborted;
@@ -40,6 +47,8 @@ int check_abort() {
 int next_frame() {
     if (check_abort())
         return 0;
+    /* Next PCM step, a chunk per frame */
+    pcm_fill_more();
     vsync_wait();
     return 1;
 }
@@ -248,8 +257,9 @@ typedef enum {
     PREP_WM_BAD,        /* watermark note: mixer not verified */
     PREP_FM,            /* sweep instruments, left/right in stereo */
     PREP_SINE,          /* sweep sine */
-    PREP_DEPTH,         /* FM depth modulator level */
-    PREP_FEEDBACK       /* Feedback Steps */
+    PREP_DEPTH,         /* FM depth: modulator level */
+    PREP_FEEDBACK,      /* feedback steps */
+    PREP_PCM_CLOCK      /* PCM rate and DMA for the clock tone */
 } prep_t;
 
 void gap(uint8_t channel, unsigned frames, prep_t prep) {
@@ -278,10 +288,40 @@ void gap(uint8_t channel, unsigned frames, prep_t prep) {
         case PREP_FEEDBACK:
             sweep_prepare(channel, OPL_INSTRUMENT_FEEDBACK);
             break;
+        case PREP_PCM_CLOCK:
+            pcm_clock_arm(PCMCLK_FRAMES);
+            break;
         case PREP_NONE:
             break;
     }
     silence(1);
+}
+
+/* Repeated by DMA */
+void pcm_clock_block(unsigned frames) {
+    if (aborted)
+        return;
+
+    seq_frames += frames;
+    pcm_clock_start(); 
+    while (frames-- && next_frame())
+        pcm_clock_frame();
+    pcm_clock_stop();
+}
+
+void pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
+    unsigned step, frame;
+
+    for (step = 0; step < steps && !aborted; step++) {
+        seq_frames += frames;
+        pcm_step_start(kind, step & 1);
+        if (step + 1 < steps)
+            pcm_step_fill(kind, step + 1, (step + 1) & 1, frames);	
+        for (frame = 0; frame < frames; frame++)
+            if (!next_frame())
+                break;
+    }
+    pcm_steps_end(kind);
 }
 
 int end_sequence(uint8_t channel) {
@@ -290,6 +330,7 @@ int end_sequence(uint8_t channel) {
 
     vsync_end(&stats);
     sweep_note_off(channel);
+    pcm_finish();
 
     if (aborted) {
         printf("\nAborted\n");
@@ -298,6 +339,7 @@ int end_sequence(uint8_t channel) {
         printf("\nSequence complete: %lu frames\n", total_frames);
 
     vsync_print_stats(&stats, total_frames);
+    pcm_print_report();
     if (aborted)
         return MDF_ABORTED;
     return stats.bad ? MDF_BAD_FRAMES : MDF_OK;
@@ -329,16 +371,19 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     gap(channel, SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
     tone_hold(channel, WM_FRAMES);                              
 
+#ifndef QUICK_TEST
     /* FM */
     gap(channel, SILENCE_FRAMES, PREP_FM);
     run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);          
     silence(DECAY_FRAMES);
+#endif
 
     /* SINE */
     gap(channel, SILENCE_FRAMES, PREP_SINE);
     run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
     silence(DECAY_FRAMES);
 
+#ifndef QUICK_TEST
     /* DEPTH */
     gap(channel, SILENCE_FRAMES, PREP_DEPTH);
     run_steps(channel, STEPS_DEPTH, DEPTH_STEPS, STEP_FRAMES);         
@@ -359,6 +404,27 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     /* WAVE */
     gap(channel, SILENCE_FRAMES, PREP_SINE);
     run_steps(channel, STEPS_WAVE, WAVE_STEPS, STEP_FRAMES);
+#endif
+
+    /* PCM, 8-bit mono */
+    if (!aborted)
+        pcm_prepare();
+
+    /* PCMCLK: rate / 8 */
+    gap(channel, SILENCE_FRAMES, PREP_PCM_CLOCK);
+    pcm_clock_block(PCMCLK_FRAMES);
+
+    /* PCMIDLE: speaker on, nothing playing */
+    pcm_step_fill(PCM_SWEEP, 0, 0, PCMSINE_FRAMES);
+    silence(PCMIDLE_FRAMES);
+
+    /* PCMSINE */
+    pcm_steps(PCM_SWEEP, PCM_SWEEP_STEPS, PCMSINE_FRAMES);
+
+    /* PCMLEVEL */
+    pcm_step_fill(PCM_LEVEL, 0, 0, PCMLEVEL_FRAMES);
+    gap(channel, SILENCE_FRAMES, PREP_NONE);
+    pcm_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
 
     /* Sync */
     gap(channel, SILENCE_FRAMES, PREP_PULSES);

@@ -9,6 +9,8 @@ typedef struct {
 } dsp_version_t;
 
 int dsp_reset(uint16_t base);
+int dsp_write(uint16_t base, uint8_t val);
+int dsp_read(uint16_t base);
 int dsp_get_version(uint16_t base, dsp_version_t *ver);
 
 #endif

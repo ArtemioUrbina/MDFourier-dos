@@ -37,6 +37,7 @@
  * Volumes are L/R nibbles: FM and mic 8 = 0 dB, 15 = +10.5 dB;
  * CD, aux, line, mono in 13 = 0 dB; 0 = mute */
 #define ESS_ID      0x40        /* reads 0x18, then 0x69 */
+#define ESS_VOICE   0x14        /* Audio 1 (DSP) play, 14 = 0 dB, 15 = +1.5 dB */
 #define ESS_MIC     0x1A
 #define ESS_FM      0x36        /* music DAC */
 #define ESS_CD      0x38        /* AuxA */
@@ -60,6 +61,8 @@ static const mix_std_t sb16_std[] = {
     { SB16_MASTER + 1, 0xF8, 0xF8, 0xF8 },
     { SB16_FM,         0xF8, 0xF8, 0xF8 },
     { SB16_FM + 1,     0xF8, 0xF8, 0xF8 },
+    { SB16_VOICE,      0xF8, 0xF8, 0xF8 },  /* PCM 0 dB */
+    { SB16_VOICE + 1,  0xF8, 0xF8, 0xF8 },
     { SB16_GAIN,       0xC0, 0x00, 0xC0 },  /* x1 */
     { SB16_GAIN + 1,   0xC0, 0x00, 0xC0 },
     { SB16_TREBLE,     0xF0, 0x80, 0xF0 },  /* flat */
@@ -74,6 +77,7 @@ static const mix_std_t sb16_std[] = {
 static const mix_std_t sbpro_std[] = {
     { SBP_MASTER,      0xFF, 0xFF, 0xEE },  /* max */
     { SBP_FM,          0xFF, 0xFF, 0xEE },
+    { SBP_VOICE,       0xFF, 0xFF, 0xEE },  /* PCM max, on ESS 0 dB */
     { SBP_CD,          0xFF, 0x00, 0xEE },  /* muted */
     { SBP_LINE,        0xFF, 0x00, 0xEE },
     { SBP_MIC,         0x06, 0x00, 0x06 }
@@ -84,6 +88,7 @@ static const mix_std_t ess_std[] = {
     { ESS_MASTER,      0x7F, 0x3F, 0x7F },  /* max, not muted */
     { ESS_MASTER + 2,  0x7F, 0x3F, 0x7F },
     { ESS_FM,          0xFF, 0x88, 0xFF },  /* 0 dB, 15 is +10.5 dB */
+    { ESS_VOICE,       0xFF, 0xEE, 0xFF },  /* PCM 0 dB, 15 is +1.5 dB */
     { ESS_CD,          0xFF, 0x00, 0xFF },  /* muted */
     { ESS_LINE,        0xFF, 0x00, 0xFF },
     { ESS_MIC,         0xFF, 0x00, 0xFF },
@@ -135,9 +140,11 @@ int sb16_db(uint8_t val) {
 }
 
 int report_sb16(uint16_t base) {
-    uint8_t mstl, mstr, fml, fmr, outsw, gl, gr, tl, tr, bl, br, mic, pcspk;
+    uint8_t mstl, mstr, fml, fmr, vol, vor, outsw, gl, gr, tl, tr, bl, br, mic, pcspk;
     int warn = 0;
 
+    vol   = mix_read(base, SB16_VOICE);
+    vor   = mix_read(base, SB16_VOICE + 1);
     mstl  = mix_read(base, SB16_MASTER);
     mstr  = mix_read(base, SB16_MASTER + 1);
     fml   = mix_read(base, SB16_FM);
@@ -152,17 +159,18 @@ int report_sb16(uint16_t base) {
     mic   = (uint8_t)(mix_read(base, SB16_MIC) >> 3);
     pcspk = (uint8_t)(mix_read(base, SB16_PCSPK) >> 6);
 
-    printf("Mixer: SB16, master %d/%d dB, FM %d/%d dB, gain x%d/x%d\n",
+    printf("Mixer: SB16, master %d/%d dB, FM %d/%d dB, voice %d/%d dB, gain x%d/x%d\n",
            sb16_db(mstl), sb16_db(mstr), sb16_db(fml), sb16_db(fmr),
-           1 << gl, 1 << gr);
+           sb16_db(vol), sb16_db(vor), 1 << gl, 1 << gr);
     printf("       treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
            tl, tr, bl, br, 6 * pcspk - 18);
     printf("       to output:%s%s%s%s\n",
            (outsw & 0x06) ? " CD" : "", (outsw & 0x18) ? " line" : "",
            (outsw & 0x01) ? " mic" : "", (outsw & 0x1F) ? "" : " none");
 
-    if ((mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31) {
-        printf("  WARNING: master or FM below 0 dB\n");
+    if ((mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31 ||
+        (vol >> 3) != 31 || (vor >> 3) != 31) {
+        printf("  WARNING: master, FM or voice below 0 dB\n");
         warn = 1;
     }
     if (gl || gr) {
@@ -198,23 +206,25 @@ int report_sb16(uint16_t base) {
 
 /* Only tested in DosBox */
 int report_sbpro(uint16_t base) {
-    uint8_t mst, fm, cd, line, mic;
+    uint8_t mst, fm, voice, cd, line, mic;
     int warn = 0;
 
+    voice = mix_read(base, SBP_VOICE);
     mst  = mix_read(base, SBP_MASTER);
     fm   = mix_read(base, SBP_FM);
     cd   = mix_read(base, SBP_CD);
     line = mix_read(base, SBP_LINE);
     mic  = (uint8_t)((mix_read(base, SBP_MIC) >> 1) & 0x03);
 
-    printf("Mixer: SB Pro, master %u/%u, FM %u/%u (7 = 0 dB)\n",
-           mst >> 5, (mst >> 1) & 7, fm >> 5, (fm >> 1) & 7);
+    printf("Mixer: SB Pro, master %u/%u, FM %u/%u, voice %u/%u (7 = 0 dB)\n",
+           mst >> 5, (mst >> 1) & 7, fm >> 5, (fm >> 1) & 7,
+           voice >> 5, (voice >> 1) & 7);
     printf("       CD %u/%u, line %u/%u (0 = -46 dB), mic %u/3\n",
            cd >> 5, (cd >> 1) & 7, line >> 5, (line >> 1) & 7, mic);
 
     /* bits 4 and 0 are unused, 0xEE is max */
-    if ((mst & 0xEE) != 0xEE || (fm & 0xEE) != 0xEE) {
-        printf("  WARNING: master or FM below max\n");
+    if ((mst & 0xEE) != 0xEE || (fm & 0xEE) != 0xEE || (voice & 0xEE) != 0xEE) {
+        printf("  WARNING: master, FM or voice below max\n");
         warn = 1;
     }
     if ((cd & 0xEE) || (line & 0xEE) || mic) {
@@ -230,9 +240,10 @@ int report_sbpro(uint16_t base) {
 
 /* ESS extended registers, the SB Pro view hides mutes */
 int report_ess(uint16_t base) {
-    uint8_t mstl, mstr, fm, cd, line, mic, aux, mono, pcspk, mmix, d3;
+    uint8_t mstl, mstr, fm, voice, cd, line, mic, aux, mono, pcspk, mmix, d3;
     int warn = 0;
 
+    voice = mix_read(base, ESS_VOICE);
     mstl  = mix_read(base, ESS_MASTER);
     mstr  = mix_read(base, ESS_MASTER + 2);
     fm    = mix_read(base, ESS_FM);
@@ -245,9 +256,9 @@ int report_ess(uint16_t base) {
     mmix  = (uint8_t)(mix_read(base, ESS_MONOMIX) & 0x01);
     d3    = (uint8_t)(mix_read(base, ESS_3D) & 0x08);
 
-    printf("Mixer: ESS, master %u/%u%s (63 = max), FM %u/%u (8 = 0 dB)%s\n",
+    printf("Mixer: ESS, master %u/%u%s (63 = max), FM %u/%u (8 = 0 dB), voice %u/%u (14 = 0 dB)%s\n",
            mstl & 0x3F, mstr & 0x3F, ((mstl | mstr) & 0x40) ? " muted" : "",
-           fm >> 4, fm & 0x0F, d3 ? ", 3-D on" : "");
+           fm >> 4, fm & 0x0F, voice >> 4, voice & 0x0F, d3 ? ", 3-D on" : "");
     printf("       CD %u/%u, line %u/%u, mic %u/%u, aux %u/%u, mono in %u/%u, PC speaker %u\n",
            cd >> 4, cd & 0x0F, line >> 4, line & 0x0F, mic >> 4, mic & 0x0F,
            aux >> 4, aux & 0x0F, mono >> 4, mono & 0x0F, pcspk);
@@ -259,6 +270,11 @@ int report_ess(uint16_t base) {
     if (fm != 0x88) {
         printf("  WARNING: FM not at 0 dB, %s\n",
                ((fm >> 4) > 8 || (fm & 0x0F) > 8) ? "boosted, may clip" : "below 0 dB");
+        warn = 1;
+    }
+    if (voice != 0xEE) {
+        printf("  WARNING: voice not at 0 dB, %s\n",
+               ((voice >> 4) > 14 || (voice & 0x0F) > 14) ? "boosted, may clip" : "below 0 dB");
         warn = 1;
     }
     if (d3) {

@@ -8,6 +8,7 @@
 #include <i86.h>
 #include "carddrv.h"
 #include "dsp.h"
+#include "pcm.h"
 #include "env.h"
 #include "mixer.h"
 #include "opl.h"
@@ -116,6 +117,8 @@ int main(int argc, char *argv[]) {
         printf("No usable vertical retrace (VGA required)\n");
         return EXIT_NO_VGA;
     }
+
+    pcm_init(&cfg, hz);
 
     printf("Probing FM (%s)...", opl_driver.name);
     if(opl_driver.detect()) {
