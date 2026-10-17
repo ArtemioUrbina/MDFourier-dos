@@ -26,7 +26,7 @@
 #define EXIT_NO_VGA     3   /* no usable vertical retrace */
 #define EXIT_NO_FM      4   /* no OPL2/OPL3 at 0x388 */
 #define EXIT_ABORTED    5   /* ESC pressed */
-#define EXIT_BAD_FRAMES 6   /* complete, frames out of tolerance: discard */
+#define EXIT_BAD_FRAMES 6   /* frame out of tolerance, discard */
 
 /* Windows virtualizes VGA, PIT and interrupts, so we check
  * INT 2Fh AX=1600h for 00h or 80h in AL when it is not running */
@@ -56,6 +56,7 @@ int main(int argc, char *argv[]) {
             report_only = 1;
         else {
             printf("Usage: MDF [/K | /R]\n"
+                   "  Needs a 486SX or faster with internal cache enabled\n,
                    "  The mixer is set for capture and restored at exit\n"
                    "  /K  keep the current mixer settings\n"
                    "  /R  print the current mixer settings and exit\n");

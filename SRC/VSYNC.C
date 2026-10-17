@@ -28,13 +28,14 @@
 #define EDGE_TIMEOUT    PIT_US_TO_CLK(100000UL)   
 #define CALIB_FRAMES    16
 
-static uint32_t      period_clk;
-static double        period_exact;
-static uint32_t      last_edge;
-static vsync_stats_t stats;
+uint32_t      period_clk;
+double        period_exact;
+uint32_t      last_edge;
+vsync_stats_t stats;
 
-static void wait_edge();
-static int  wait_edge_timeout(uint32_t timeout);
+unsigned long first_bad_frame;
+void wait_edge();
+int  wait_edge_timeout(uint32_t timeout);
 
 int vsync_calibrate(double *hz) {
     uint32_t start, end, total;
@@ -89,12 +90,15 @@ void vsync_wait() {
     last_edge = t;
     stats.frames++;
     stats.total_clk += delta;
-    if (delta + FRAME_TOL_CLK < period_clk || delta  > period_clk + FRAME_TOL_CLK)
+    if (delta + FRAME_TOL_CLK < period_clk || delta  > period_clk + FRAME_TOL_CLK) {
+        if (!stats.bad)
+            first_bad_frame = stats.frames;
         stats.bad++;
+    }
 }
 
 /* Start of the next retrace. */
-static void wait_edge() {
+void wait_edge() {
     while (inp(VGA_STATUS_PORT) & VGA_VRETRACE)
         ;   /* let any retrace already in progress finish */
 
@@ -103,7 +107,7 @@ static void wait_edge() {
 }
 
 /* VGA detection */
-static int wait_edge_timeout(uint32_t timeout) {
+int wait_edge_timeout(uint32_t timeout) {
     uint32_t start = pit_now();
 
     while (inp(VGA_STATUS_PORT) & VGA_VRETRACE)
@@ -113,6 +117,10 @@ static int wait_edge_timeout(uint32_t timeout) {
         if ((uint32_t)(pit_now() - start) > timeout)
             return 0;
     return 1;
+}
+
+unsigned long vsync_first_bad() {
+    return stats.bad ? first_bad_frame : 0;
 }
 
 void vsync_end(vsync_stats_t *out) {

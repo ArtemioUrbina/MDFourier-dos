@@ -27,11 +27,18 @@
 #define PCMIDLE_FRAMES  20
 #define PCMSINE_FRAMES  10
 #define PCMLEVEL_FRAMES 20
+#define PSCLK_FRAMES    60      /* 8-bit stereo */
+#define PSSEP_FRAMES    20
+#define P16CLK_FRAMES   60      /* 16-bit stereo */
+#define P16SINE_FRAMES  10
+#define P16LEVEL_FRAMES 20
+#define P16SEP_FRAMES   20
 
 /* wmake QUICK=1 builds a short run with Sine and PCM only for testing */
 
 /* ESC pressed */
 int aborted;
+int bad_stop;
 int stereo;
 
 /* Frames the blocks are meant to play, each adds its own length.
@@ -39,6 +46,10 @@ int stereo;
 unsigned long seq_frames;
 
 int check_abort() {
+    if (!aborted && vsync_first_bad()) {
+        aborted  = 1;
+        bad_stop = 1;
+    }
     if (!aborted && kbd_poll_escape())
         aborted = 1;
     return aborted;
@@ -303,7 +314,7 @@ void pcm_clock_block(unsigned frames) {
         return;
 
     seq_frames += frames;
-    pcm_clock_start(); 
+    pcm_clock_start();
     while (frames-- && next_frame())
         pcm_clock_frame();
     pcm_clock_stop();
@@ -324,6 +335,45 @@ void pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
     pcm_steps_end(kind);
 }
 
+/* Filler for the stereo / 16-bit blocks a card can't play, so the
+ * recording doesn't go quiet for ~15 s and look finished.
+ * MDFourier skips those types when their clock block has no tone */
+#define FILLER_HZ       440
+#define FILLER_LEVEL    20      /* carrier attenuation, 0.75 dB steps: -15 dB */
+
+void filler_on(uint8_t channel) {
+    if (stereo)
+        opl_set_pan(channel, OPL_PAN_CENTER);
+        
+    opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
+    opl_set_car_level(channel, FILLER_LEVEL);
+    opl_note_on(channel, FILLER_HZ);
+}
+
+void pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned frames, int next_kind) {
+    unsigned step, frame;
+    int      filler = !st_enabled(kind) && kind != PCMX_CLK8 && kind != PCMX_CLK16;
+
+    if (filler && !aborted)
+        filler_on(channel);
+
+    for (step = 0; step < steps && !aborted; step++) {
+        seq_frames += frames;
+        pcmx_step_start(kind);
+        if (step + 1 < steps)
+            pcmx_step_fill(kind, step + 1);
+        else if (next_kind >= 0)
+            pcmx_step_fill((pcmx_kind_t)next_kind, 0);
+        for (frame = 0; frame < frames; frame++)
+            if (!next_frame())
+                break;
+    }
+    if (filler)
+        opl_note_off(channel);
+    if (next_kind < 0)
+        pcmx_steps_end(kind);
+}
+
 int end_sequence(uint8_t channel) {
     vsync_stats_t stats;
     unsigned long total_frames = seq_frames;
@@ -332,6 +382,12 @@ int end_sequence(uint8_t channel) {
     sweep_note_off(channel);
     pcm_finish();
 
+    if (bad_stop) {
+        printf("\nStopped at frame %lu, it ran late: this CPU is too slow.\n"
+               "  MDF needs a 486SX with its internal cache enabled, in an\n"
+               "  emulator raise the cycles. Discard this capture\n", vsync_first_bad());
+        return MDF_BAD_FRAMES;
+    }
     if (aborted) {
         printf("\nAborted\n");
         total_frames = stats.frames;
@@ -348,6 +404,7 @@ int end_sequence(uint8_t channel) {
 int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixer_ok) {
     stereo     = use_stereo;
     aborted    = 0;
+    bad_stop   = 0;
     seq_frames = 0;
 
     pulse_prepare(channel);
@@ -425,6 +482,22 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     pcm_step_fill(PCM_LEVEL, 0, 0, PCMLEVEL_FRAMES);
     gap(channel, SILENCE_FRAMES, PREP_NONE);
     pcm_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
+
+    /* PCM 8-bit stereo: DSP 3.xx and 4.xx, silent on older cards */
+    if (!aborted)
+        pcmx_begin();
+    gap(channel, SILENCE_FRAMES, PREP_NONE);
+    pcmx_steps(channel, PCMX_CLK8, 1, PSCLK_FRAMES, PCMX_SEP8);
+    pcmx_steps(channel, PCMX_SEP8, PCMX_SEP_STEPS, PSSEP_FRAMES, -1);
+
+    /* PCM 16-bit stereo: DSP 4.xx with BLASTER H, silent elsewhere */
+    gap(channel, SILENCE_FRAMES, PREP_NONE);
+    pcmx_steps(channel, PCMX_CLK16, 1, P16CLK_FRAMES, PCMX_SWEEP16);
+    pcmx_steps(channel, PCMX_SWEEP16, PCMX_SWEEP_STEPS, P16SINE_FRAMES, -1);
+    pcmx_step_fill(PCMX_LEVEL16, 0);
+    gap(channel, SILENCE_FRAMES, PREP_NONE);
+    pcmx_steps(channel, PCMX_LEVEL16, PCMX_LEVEL_STEPS, P16LEVEL_FRAMES, PCMX_SEP16);
+    pcmx_steps(channel, PCMX_SEP16, PCMX_SEP_STEPS, P16SEP_FRAMES, -1);
 
     /* Sync */
     gap(channel, SILENCE_FRAMES, PREP_PULSES);

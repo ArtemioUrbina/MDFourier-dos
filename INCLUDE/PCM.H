@@ -27,6 +27,37 @@ void pcm_step_start(pcm_steps_t kind, unsigned buf);
 void pcm_fill_more();
 void pcm_steps_end(pcm_steps_t kind);
 
+/* ---- Stereo and 16-bit ----
+ * Played only when supported
+ * 8-bit stereo on DSP 3.xx and 4.xx
+ * 16-bit stereo on DSP 4.xx with BLASTER H
+ * Elsewhere the blocks stay silent and the sequence keeps its timing */
+
+#define PCMX_SWEEP_STEPS 64     /* 25 Hz to 20 kHz */
+#define PCMX_LEVEL_STEPS 8      /* 0 to -84 dB in 12 dB steps */
+#define PCMX_SEP_STEPS   3      /* left, right, both */
+
+typedef enum {
+    PCMX_STEREO,                /* 8-bit stereo */
+    PCMX_16                     /* 16-bit stereo */
+} pcmx_section_t;
+
+typedef enum {
+    PCMX_CLK8,
+    PCMX_SEP8,
+    PCMX_CLK16,
+    PCMX_SWEEP16,
+    PCMX_LEVEL16,
+    PCMX_SEP16,
+    PCMX_KIND_COUNT
+} pcmx_kind_t;
+
+void pcmx_begin();
+void pcmx_step_fill(pcmx_kind_t kind, unsigned step);
+void pcmx_step_start(pcmx_kind_t kind);
+void pcmx_steps_end(pcmx_kind_t kind);
+int st_enabled(pcmx_kind_t kind);
+
 void pcm_finish();
 void pcm_print_report();
 

@@ -18,4 +18,8 @@ int mixer_report(blaster_cfg_t *cfg);
 int mixer_set_standard(blaster_cfg_t *cfg);
 void mixer_restore();
 
+/* Mixer register access, used by pcm.c */
+uint8_t mix_read(uint16_t base, uint8_t reg);
+void    mix_write(uint16_t base, uint8_t reg, uint8_t val);
+
 #endif
