@@ -18,7 +18,6 @@ int pcm_init(blaster_cfg_t *cfg, double frame_hz);
 void pcm_prepare();
 void pcm_clock_arm(unsigned frames);
 void pcm_clock_start();
-void pcm_clock_frame();
 void pcm_clock_stop();
 
 void pcm_step_fill(pcm_steps_t kind, unsigned step, unsigned buf, unsigned frames);

@@ -38,10 +38,7 @@
 #define DSP_SPEAKER_ON  0xD1
 #define DSP_SPEAKER_OFF 0xD3
 #define DSP_TIME_CONST  0x40
-#define DSP_PLAY_8BIT   0x14    /* single-cycle, 8-bit mono */
-#define DSP_BLOCK_SIZE  0x48    /* auto-init block size, DSP 2.00+ */
-#define DSP_AUTO_8BIT   0x1C    /* auto-init, 8-bit mono, DSP 2.00+ */
-#define DSP_EXIT_AUTO   0xDA    /* stop auto-init at the end of the block */
+#define DSP_PLAY_8BIT   0x14    /* single-cycle, 8-bit mono, every DSP */
 
 /* Rate = 1000000 / (256 - TC). TC 211 gives 22222.2 Hz, in range for
  * normal mode on every DSP version */
@@ -57,11 +54,11 @@
  * Its frequency measures the card's crystal: MDFourier reads it and
  * names the card family from it. Each 8-sample period ends on 0x80,
  * so the DAC rests at the midpoint whenever it stops (no click).
- * The block needs ~18000 samples, the buffer holds CLK_MAX. The DMA
- * repeats it, CLK_BLOCKS times, filling ~CLK_PCT of the block */
+ * The block needs ~18000 samples, the buffer holds CLK_MAX.
+ * DMA loops it in auto-init while the DSP plays one
+ * single-cycle transfer of ~CLK_PCT of the block.  */
 #define CLK_PERIOD      8
 #define CLK_MAX         5600
-#define CLK_BLOCKS      4
 #define CLK_PCT         95
 
 /* Step tones. Level at rate / 22 so every period is the same 22
@@ -97,12 +94,7 @@ int8_t sine[SINE_SIZE];
 int8_t amp_sine[AMP_TABLES][SINE_SIZE];
 
 /* DMA buffers: clock, then two steps (one plays while the other is
- * built). The 8237 can't cross a 64 KB physical page. Its page
- * register doesn't carry. A static array may straddle one, so the
- * area is twice the size. A boundary falls in at most one half, and
- * pick_buffers() uses the other */
-#define AREA_NEED       (CLK_MAX + 2u * STEP_MAX)
-uint8_t __far dma_area[AREA_NEED * 2u];
+ * built). From buf_alloc(), with the stereo ones */
 uint8_t __far *clk_buf;
 uint8_t __far *step_buf[2];
 uint16_t step_len[2];
@@ -137,12 +129,7 @@ int       installed;
 /* Transfers ended, from the ISR. */
 volatile unsigned irq_count;
 
-/* DSP 1.xx has no auto-init. The ISR restarts single-cycle transfers
- * over the auto-init DMA until clk_blocks have played */
-volatile int      clk_restart;
-unsigned          clk_blocks;
-uint16_t          clk_len;
-int               clk_exit_sent;
+uint16_t          clk_len;       /* clock samples, a whole number of periods */
 int               playing;       /* a transfer may be running */
 
 /* Results */
@@ -160,6 +147,7 @@ pcm_count_t count_steps[2] = { { "sweep", 0, 0 }, { "level", 0, 0 } };
 unsigned step_irq_base;
 int      step_pending;
 
+int  buf_alloc(int stereo);
 void st_init(blaster_cfg_t *cfg);
 void st_fill_samples(unsigned max_frames);
 void st_finish();
@@ -189,16 +177,6 @@ void __interrupt __far pcm_isr() {
 
     irq_count++;
 
-    /* DSP 1.xx clock: the DMA keeps looping the buffer, the DSP needs
-     * a new single-cycle command for each block */
-    if (clk_restart && irq_count < clk_blocks) {
-        uint16_t len_minus_1 = (uint16_t)(clk_len - 1);
-
-        dsp_write(base, DSP_PLAY_8BIT);
-        dsp_write(base, (uint8_t)(len_minus_1 & 0xFF));
-        dsp_write(base, (uint8_t)(len_minus_1 >> 8));
-    }
-
     /* End of interrupt, to the second PIC as well for IRQ 8-15. 
      * It reaches the CPU through the first one (cascade on IRQ 2) */
     if (irq >= 8)
@@ -210,19 +188,6 @@ void __interrupt __far pcm_isr() {
 /* Real mode address: segment * 16 + offset. DMA needs the physical one */
 uint32_t phys_of(void __far *ptr) {
     return ((uint32_t)FP_SEG(ptr) << 4) + FP_OFF(ptr);
-}
-
-/* The half of dma_area that doesn't cross a 64 KB page */
-void pick_buffers() {
-    uint8_t __far *area = dma_area;
-    uint32_t area_phys = phys_of(dma_area);
-
-    if ((area_phys >> 16) != ((area_phys + AREA_NEED - 1) >> 16))
-        area = dma_area + AREA_NEED;
-
-    clk_buf     = area;
-    step_buf[0] = area + CLK_MAX;
-    step_buf[1] = area + CLK_MAX + STEP_MAX;
 }
 
 void build_tables() {
@@ -291,7 +256,6 @@ int dsp_play(uint8_t cmd, uint16_t len) {
  * can drop what follows it */
 void recover() {
     dma_mask();
-    clk_restart = 0;
     dsp_reset(base);
     dsp_write(base, DSP_TIME_CONST);
     dsp_write(base, PCM_TC);
@@ -361,15 +325,18 @@ int pcm_init(blaster_cfg_t *cfg, double frame_hz) {
 
     dsp_major = ver.major;
 
+    if (!buf_alloc(dsp_major >= 3)) {
+        printf("PCM: no memory for buffers\n");
+        return 0;
+    }
+
     /* Slow on a 486 SX since sin() is emulated, alert the user we are working */
     printf("PCM: building tables...\n");
-    pick_buffers();
     build_tables();
     pcm_install();
     ready = 1;
 
-    printf("PCM: 8-bit mono, %.1f Hz, IRQ %u, DMA %u, clock %s\n",
-           PCM_RATE, irq, dma, dsp_major >= 2 ? "auto-init" : "restarted (DSP 1.xx)");
+    printf("PCM: 8-bit mono, %.1f Hz, IRQ %u, DMA %u\n", PCM_RATE, irq, dma);
     st_init(cfg);
     return 1;
 }
@@ -387,73 +354,44 @@ void pcm_prepare() {
 /* In the gap's last frame: everything but the start, so the start on
  * the frame edge is a single DSP command, as quick as it gets */
 void pcm_clock_arm(unsigned frames) {
-    unsigned long block_len;
+    unsigned long total;
 
     if (!ready)
         return;
 
-    /* The total over the block, split in DMA blocks of whole periods:
-     * the buffer loops and each block ends on 0x80 */
-    block_len = (unsigned long)(PCM_RATE * frames * CLK_PCT / 100.0 / frame_rate);
-    clk_blocks = CLK_BLOCKS;
-    block_len = block_len / clk_blocks;
-    block_len -= block_len % CLK_PERIOD;
-    if (block_len > CLK_MAX)
-        block_len = CLK_MAX - CLK_MAX % CLK_PERIOD;
-    clk_len = (uint16_t)block_len;
-    clk_exit_sent = 0;
-    count_clock.expected = clk_blocks;
+    /* Whole periods, so it ends on 0x80. Under 64 KB, one DSP count */
+    total = (unsigned long)(PCM_RATE * frames * CLK_PCT / 100.0 / frame_rate);
+    total -= total % CLK_PERIOD;
+    if (total > 0xFFF8UL)
+        total = 0xFFF8UL;
+    clk_len = (uint16_t)total;
+    count_clock.expected = 1;
 
-    /* Rate set here, frames after the speaker on */
+    /* Rate set here, frames after the speaker on. The DMA loops the
+     * buffer, the DSP count says when to stop */
     dsp_write(base, DSP_TIME_CONST);
     dsp_write(base, PCM_TC);
-    dma_program(clk_buf, clk_len, DMA_MODE_AUTO);
-    if (dsp_major >= 2)
-        dsp_play(DSP_BLOCK_SIZE, clk_len);
+    dma_program(clk_buf, CLK_MAX, DMA_MODE_AUTO);
 }
 
-/* DSP 2.00 and higher: auto-init, the DSP repeats the block with an IRQ after each one.
- * DSP 1.xx: one single-cycle block, the ISR sends the next */
+/* On the frame edge, one single-cycle transfer for the whole tone */
 void pcm_clock_start() {
     if (!ready)
         return;
 
     irq_count = 0;
-    if (dsp_major >= 2) {
-        /* One block only: exit right away, it stops at its end */
-        if (dsp_write(base, DSP_AUTO_8BIT))
-            playing = 1;
-        if (clk_blocks == 1) {
-            dsp_write(base, DSP_EXIT_AUTO);
-            clk_exit_sent = 1;
-        }
-    } else {
-        clk_restart = 1;
-        if (dsp_play(DSP_PLAY_8BIT, clk_len))
-            playing = 1;
-    }
+    if (dsp_play(DSP_PLAY_8BIT, clk_len))
+        playing = 1;
 }
 
-/* Auto-init repeats until told to stop once the last block is playing, 0xDA makes it the last one */
-void pcm_clock_frame() {
-    if (!ready || !playing || dsp_major < 2 || clk_exit_sent)
-        return;
-
-    if (irq_count >= clk_blocks - 1) {
-        dsp_write(base, DSP_EXIT_AUTO);
-        clk_exit_sent = 1;
-    }
-}
-
-/* Every DMA block should have ended with its IRQ */
+/* One IRQ should have come */
 void pcm_clock_stop() {
     if (!ready)
         return;
 
     count_clock.got = irq_count;
-    clk_restart = 0;
 
-    if (irq_count >= clk_blocks) {
+    if (irq_count >= 1) {
         dma_mask();
         playing = 0;
     } else
@@ -629,8 +567,8 @@ void pcm_print_report() {
  *
  * 8-bit stereo, DSP 3.xx: SB Pro method, as in Creative's programming
  * guide ("8-bit Stereo High-speed Single-cycle Transfer"): mixer 0x0E
- * stereo on and output filter off, one silent byte so the first sample
- * goes left, then high-speed transfers at 1 MHz/23 bytes/s (21739 Hz per
+ * stereo on and output filter off, one silent byte so the channels start
+ * in order, then high-speed transfers at 1 MHz/23 bytes/s (21739 Hz per
  * channel). Mixer 0x0E restored by pcm_finish().
  * 8-bit stereo, DSP 4.xx: 0xC0 with the stereo mode bit, 22050 Hz.
  * 16-bit stereo, DSP 4.xx: 0xB0 signed stereo, 44100 Hz, high DMA.
@@ -649,6 +587,7 @@ void pcm_print_report() {
 #define MODE_U8_STEREO  0x20
 #define MODE_S16_STEREO 0x30
 #define DSP_HS_8BIT     0x91    /* DSP 3.xx high-speed 8-bit single-cycle */
+#define DSP_BLOCK_SIZE  0x48    /* its length, sent before it */
 #define SBP_OUT_CTRL    0x0E    /* SB Pro mixer, bit 1 stereo, bit 5 filter off */
 #define SBP_STEREO      0x02
 #define SBP_FILTER_OFF  0x20
@@ -751,46 +690,58 @@ struct {
 } sf;
 
 /* ---- Memory: one DOS block, buffers placed so none crosses 64 KB ----
- * The buffers are ~52 KB, more than the small model's single 64 KB
- * data segment can spare: they come from DOS instead */
+ * The 8237 can't cross a 64 KB physical page: its page register
+ * doesn't carry. With stereo the buffers are ~75 KB, more than the
+ * small model's single 64 KB data segment can spare: they come from
+ * DOS, and each is placed so it stays within one page */
 
-uint32_t st_cursor, st_end;     /* physical: next free byte, end of the block */
+uint32_t buf_cursor, buf_end;   /* physical: next free byte, end of the block */
 
 /* The next free spot that doesn't cross a 64 KB page, on an even
  * address since 16-bit DMA moves words */
-void __far *st_place(uint32_t bytes) {
-    uint32_t phys = (st_cursor + 1) & ~1UL;
+void __far *buf_place(uint32_t bytes) {
+    uint32_t phys = (buf_cursor + 1) & ~1UL;
 
     if ((phys >> 16) != ((phys + bytes - 1) >> 16))
         phys = (phys + 0xFFFFUL) & ~0xFFFFUL;      /* start of the next page */
 
-    if (phys + bytes > st_end)
+    if (phys + bytes > buf_end)
         return 0;
 
-    st_cursor = phys + bytes;
+    buf_cursor = phys + bytes;
     return MK_FP((unsigned)(phys >> 4), (unsigned)(phys & 15));
 }
 
-int st_alloc() {
-    unsigned seg;
-    uint32_t need  = 2UL * ST_STEP_L * 4 + ST_CLK_L * 4 + ST_CLK_L * 2;
-    uint32_t total = need + 3 * 0x10000UL / 2;      /* room to skip pages */
+/* Mono buffers always, stereo ones from DSP 3.xx. A buffer that would
+ * cross a page starts at the next one: each one under 21.5 KB, the
+ * skips waste less than 64 KB in total */
+#define MONO_NEED       (CLK_MAX + 2UL * STEP_MAX)
+#define STEREO_NEED     (2UL * ST_STEP_L * 4 + ST_CLK_L * 4 + ST_CLK_L * 2)
 
-    if (total > 0xFFFF0UL)
-        total = 0xFFFF0UL;
+int buf_alloc(int stereo) {
+    unsigned seg;
+    uint32_t total = MONO_NEED + (stereo ? STEREO_NEED : 0) + 0x10000UL;
 
     /* In 16-byte paragraphs */
     if (_dos_allocmem((unsigned)((total + 15) >> 4), &seg) != 0)
         return 0;
 
-    st_cursor = (uint32_t)seg << 4;
-    st_end    = st_cursor + total;
+    buf_cursor = (uint32_t)seg << 4;
+    buf_end    = buf_cursor + total;
 
-    st_step[0] = (uint8_t __far *)st_place(ST_STEP_L * 4UL);
-    st_step[1] = (uint8_t __far *)st_place(ST_STEP_L * 4UL);
-    st_clk16   = (int16_t __far *)st_place(ST_CLK_L * 4UL);
-    st_clk8    = (uint8_t __far *)st_place(ST_CLK_L * 2UL);
-    return st_step[0] && st_step[1] && st_clk16 && st_clk8;
+    clk_buf     = (uint8_t __far *)buf_place(CLK_MAX);
+    step_buf[0] = (uint8_t __far *)buf_place(STEP_MAX);
+    step_buf[1] = (uint8_t __far *)buf_place(STEP_MAX);
+    if (!clk_buf || !step_buf[0] || !step_buf[1])
+        return 0;
+
+    if (stereo) {
+        st_step[0] = (uint8_t __far *)buf_place(ST_STEP_L * 4UL);
+        st_step[1] = (uint8_t __far *)buf_place(ST_STEP_L * 4UL);
+        st_clk16   = (int16_t __far *)buf_place(ST_CLK_L * 4UL);
+        st_clk8    = (uint8_t __far *)buf_place(ST_CLK_L * 2UL);
+    }
+    return 1;
 }
 
 void st_build_tables() {
@@ -840,7 +791,7 @@ void st_init(blaster_cfg_t *cfg) {
         return;
     }
 
-    if (!st_alloc()) {
+    if (!st_step[0] || !st_step[1] || !st_clk16 || !st_clk8) {
         printf("PCM stereo/16-bit: not played (no memory for buffers)\n");
         return;
     }
@@ -859,7 +810,7 @@ void st_init(blaster_cfg_t *cfg) {
                dsp_major < 4 ? "needs DSP 4.xx" : "BLASTER has no H5-H7");
 }
 
-/* Cards that can't play a kind skip it: its block stays silent */
+/* Cards that can't play a kind skip it: MDF.C plays a filler */
 int st_enabled(pcmx_kind_t kind) {
     return ready && (st_info[kind].section == PCMX_STEREO ? st_stereo_ok : st16_ok);
 }
@@ -1002,8 +953,8 @@ void st_fill_samples(unsigned max_frames) {
         for (pos = sf.pos; pos < end; pos++) {
             int16_t sample = (int16_t)(sf.table[(uint16_t)(sf.phase >> 16) >> (16 - ST_SINE_BITS)] >> sf.level_shift);
 
-            dest[0] = sample & left_mask;
-            dest[1] = sample & right_mask;
+            dest[0] = sample & right_mask;      /* measured: first of a pair plays right */
+            dest[1] = sample & left_mask;
             dest += 2;
             sf.phase += sf.phase_inc;
         }
@@ -1017,8 +968,8 @@ void st_fill_samples(unsigned max_frames) {
         for (pos = sf.pos; pos < end; pos++) {
             uint8_t sample = st_sine8[(uint16_t)(sf.phase >> 16) >> (16 - ST_SINE_BITS)];
 
-            dest[0] = (uint8_t)((sample & left_mask) | (0x80 & ~left_mask));
-            dest[1] = (uint8_t)((sample & right_mask) | (0x80 & ~right_mask));
+            dest[0] = (uint8_t)((sample & right_mask) | (0x80 & ~right_mask));
+            dest[1] = (uint8_t)((sample & left_mask) | (0x80 & ~left_mask));
             dest += 2;
             sf.phase += sf.phase_inc;
         }

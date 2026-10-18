@@ -308,7 +308,7 @@ void gap(uint8_t channel, unsigned frames, prep_t prep) {
     silence(1);
 }
 
-/* Repeated by DMA */
+/* One transfer, DMA loops the buffer */
 void pcm_clock_block(unsigned frames) {
     if (aborted)
         return;
@@ -316,7 +316,7 @@ void pcm_clock_block(unsigned frames) {
     seq_frames += frames;
     pcm_clock_start();
     while (frames-- && next_frame())
-        pcm_clock_frame();
+        ;
     pcm_clock_stop();
 }
 
@@ -483,14 +483,14 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     gap(channel, SILENCE_FRAMES, PREP_NONE);
     pcm_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
 
-    /* PCM 8-bit stereo: DSP 3.xx and 4.xx, silent on older cards */
+    /* PCM 8-bit stereo: DSP 3.xx and 4.xx, filler on older cards */
     if (!aborted)
         pcmx_begin();
     gap(channel, SILENCE_FRAMES, PREP_NONE);
     pcmx_steps(channel, PCMX_CLK8, 1, PSCLK_FRAMES, PCMX_SEP8);
     pcmx_steps(channel, PCMX_SEP8, PCMX_SEP_STEPS, PSSEP_FRAMES, -1);
 
-    /* PCM 16-bit stereo: DSP 4.xx with BLASTER H, silent elsewhere */
+    /* PCM 16-bit stereo: DSP 4.xx with BLASTER H, filler elsewhere */
     gap(channel, SILENCE_FRAMES, PREP_NONE);
     pcmx_steps(channel, PCMX_CLK16, 1, P16CLK_FRAMES, PCMX_SWEEP16);
     pcmx_steps(channel, PCMX_SWEEP16, PCMX_SWEEP_STEPS, P16SINE_FRAMES, -1);

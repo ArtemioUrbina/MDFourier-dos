@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
             report_only = 1;
         else {
             printf("Usage: MDF [/K | /R]\n"
-                   "  Needs a 486SX or faster with internal cache enabled\n,
+                   "  Needs a 486SX or faster with internal cache enabled\n"
                    "  The mixer is set for capture and restored at exit\n"
                    "  /K  keep the current mixer settings\n"
                    "  /R  print the current mixer settings and exit\n");
