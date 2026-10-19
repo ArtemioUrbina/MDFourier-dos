@@ -490,7 +490,9 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     pcmx_steps(channel, PCMX_CLK8, 1, PSCLK_FRAMES, PCMX_SEP8);
     pcmx_steps(channel, PCMX_SEP8, PCMX_SEP_STEPS, PSSEP_FRAMES, -1);
 
-    /* PCM 16-bit stereo: DSP 4.xx with BLASTER H, filler elsewhere */
+    /* PCM 16-bit stereo: DSP 4.xx with BLASTER H and ESS Extended mode, filler elsewhere */
+    if (!aborted)
+        pcmx_begin16();
     gap(channel, SILENCE_FRAMES, PREP_NONE);
     pcmx_steps(channel, PCMX_CLK16, 1, P16CLK_FRAMES, PCMX_SWEEP16);
     pcmx_steps(channel, PCMX_SWEEP16, PCMX_SWEEP_STEPS, P16SINE_FRAMES, -1);

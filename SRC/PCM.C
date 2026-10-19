@@ -2,7 +2,8 @@
  * PCM through the Sound Blaster DSP
  * 8-bit mono on every DSP
  * 8-bit stereo on DSP 3.xx (SB Pro method) and 4.xx (SB16 commands)
- * 16-bit stereo on DSP 4.xx with a high DMA channel.
+ * 16-bit stereo on DSP 4.xx with a high DMA channel, and on ESS
+ * ES18xx through their Extended mode on the 8-bit DMA channel.
  *
  * MDF.C steps through the sequence one VGA frame at a time.
  * Every tone starts with a single DSP command sent after a frame edge
@@ -17,6 +18,7 @@
  *
  * Sources:
  * https://pdos.csail.mit.edu/6.828/2017/readings/hardware/SoundBlaster.pdf
+ * https://www.philscomputerlab.com/uploads/3/7/2/3/37231621/es1869techmanual.pdf
  * Intel 8237A data sheet (DMA), Intel 8259A data sheet (PIC)
  */
 
@@ -29,6 +31,7 @@
 #include "pcm.h"
 #include "dsp.h"
 #include "mixer.h"
+#include "pit.h"
 
 
 #define DSP_READ_READY  0x0E    /* reading it acks the 8-bit IRQ */
@@ -152,6 +155,7 @@ void st_init(blaster_cfg_t *cfg);
 void st_fill_samples(unsigned max_frames);
 void st_finish();
 int  st_print_report();
+void ess_poll();
 
 /* IRQ 0-7 are vectors 0x08-0x0F, IRQ 8-15 (second PIC) 0x70-0x77 */
 unsigned vector_of(uint8_t irq_line) {
@@ -471,6 +475,7 @@ void pcm_step_fill(pcm_steps_t kind, unsigned step, unsigned buf, unsigned frame
 void pcm_fill_more() {
     fill_samples(FILL_CHUNK);
     st_fill_samples(FILL_CHUNK);
+    ess_poll();
 }
 
 /* Counts the previous step's IRQ, then starts this
@@ -572,13 +577,17 @@ void pcm_print_report() {
  * channel). Mixer 0x0E restored by pcm_finish().
  * 8-bit stereo, DSP 4.xx: 0xC0 with the stereo mode bit, 22050 Hz.
  * 16-bit stereo, DSP 4.xx: 0xB0 signed stereo, 44100 Hz, high DMA.
+ * 16-bit stereo, ESS ES18xx: Extended mode Audio 1, signed stereo at
+ * 44111 Hz measured, on the 8-bit DMA channel.
  *
  * The rate goes with every transfer. DSPs take it right away, and
  * after a recover() it is back without anything to track.
  *
  * A frame below is one sample per channel
  * 2 bytes in 8-bit stereo.
- * 2 words in 16-bit. Left first
+ * 2 words in 16-bit. Right first, as measured on every card. The
+ * ES1869 data sheet agrees for its SB Pro mode, and says left first for
+ * Extended mode, but that measures right first too
  * ====================================================================== */
 
 #define DSP_RATE_OUT    0x41    /* DSP 4.xx output rate, high byte first */
@@ -638,6 +647,9 @@ uint8_t st_sine8[ST_SINE_SIZE];      /* ST_AMP_TONE, unsigned 8-bit */
 unsigned st_sweep_cycles[PCMX_SWEEP_STEPS];
 
 int      st_stereo_ok, st16_ok;
+int      st_ess;                 /* 16-bit through ESS Extended mode */
+int      ess_active;             /* in Extended mode now */
+int      ess_failed;             /* Extended mode not accepted */
 uint8_t  hdma;
 int      st_sbpro;               /* DSP 3.xx path */
 int      st_sbp_saved = -1;      /* mixer 0x0E before stereo */
@@ -673,7 +685,12 @@ pcm_count_t st_count[PCMX_KIND_COUNT] = {
 };
 
 unsigned            st_irq_base;
+unsigned            st_irq_need = 1;        /* IRQs the start raises */
 int                 st_pending = -1;        /* kind playing, its IRQ not counted */
+
+int  ess_setup();
+int  ess_play(void __far *buf, unsigned frames, unsigned loops);
+void ess_end();
 
 /* The step being built, a chunk per frame. Same phase accumulator as
  * fill, over the loop buffer: phase_inc = cycles / ST_STEP_L * 2^32,
@@ -802,8 +819,14 @@ void st_init(blaster_cfg_t *cfg) {
     if (dsp_major >= 4 && cfg->high_dma >= 5 && cfg->high_dma <= 7)
         st16_ok = 1;
 
+    /* DSP 3.01 with the ES18xx mixer ID: Extended mode, no high DMA */
+    if (st_sbpro && is_ess(base))
+        st16_ok = st_ess = 1;
+
     printf("PCM stereo: 8-bit, %s\n", st_sbpro ? "SB Pro method, 21739 Hz" : "22050 Hz");
-    if (st16_ok)
+    if (st_ess)
+        printf("PCM 16-bit: stereo, 44111 Hz, ESS Extended mode, DMA %u\n", dma);
+    else if (st16_ok)
         printf("PCM 16-bit: stereo, 44100 Hz, DMA %u\n", hdma);
     else
         printf("PCM 16-bit: not played (%s)\n",
@@ -838,7 +861,7 @@ void dma16_program(void __far *buf, uint16_t words, uint8_t mode) {
 void st_mask_all() {
     dma_mask();
 
-    if (st16_ok)
+    if (st16_ok && !st_ess)
         outp(DMA16_MASK, 0x04 | (hdma & 3));
 }
 
@@ -863,6 +886,9 @@ int st_play(void __far *buf, unsigned frames, unsigned loops, int bits16) {
     uint32_t total_units = 2UL * frames * loops;        /* bytes or words */
     uint16_t units_minus_1 = (uint16_t)(total_units - 1);
 
+    if (bits16 && st_ess)
+        return ess_play(buf, frames, loops);
+
     if (!st_set_rate(bits16))
         return 0;
 
@@ -885,6 +911,9 @@ int st_play(void __far *buf, unsigned frames, unsigned loops, int bits16) {
 void st_recover() {
     st_mask_all();
     recover();
+    /* The reset left Extended mode, back for the steps still to play */
+    if (st_ess && ess_active)
+        ess_setup();
 }
 
 /* DSP 3.xx: stereo on, output filter off and one silent byte so the
@@ -953,7 +982,9 @@ void st_fill_samples(unsigned max_frames) {
         for (pos = sf.pos; pos < end; pos++) {
             int16_t sample = (int16_t)(sf.table[(uint16_t)(sf.phase >> 16) >> (16 - ST_SINE_BITS)] >> sf.level_shift);
 
-            dest[0] = sample & right_mask;      /* measured: first of a pair plays right */
+            /* Measured. The first of a pair plays right, ESS Extended
+             * mode too though its data sheet says left */
+            dest[0] = sample & right_mask;
             dest[1] = sample & left_mask;
             dest += 2;
             sf.phase += sf.phase_inc;
@@ -991,7 +1022,7 @@ void pcmx_step_start(pcmx_kind_t kind) {
         return;
 
     if (st_pending >= 0) {
-        if (irq_count != st_irq_base)
+        if (irq_count - st_irq_base >= st_irq_need)
             st_count[st_pending].got++;
         else
             st_recover();
@@ -999,6 +1030,7 @@ void pcmx_step_start(pcmx_kind_t kind) {
     }
 
     st_irq_base = irq_count;
+    st_irq_need = 1;
     st_count[kind].expected++;
 
     if (info->clock)
@@ -1022,7 +1054,7 @@ void pcmx_steps_end(pcmx_kind_t kind) {
     if (!st_enabled(kind) || st_pending < 0)
         return;
 
-    if (irq_count != st_irq_base) {
+    if (irq_count - st_irq_base >= st_irq_need) {
         st_count[st_pending].got++;
         st_mask_all();
     } else
@@ -1034,6 +1066,8 @@ void pcmx_steps_end(pcmx_kind_t kind) {
 void st_finish() {
     if (st_stereo_ok)
         st_mask_all();
+
+    ess_end();
 
     if (st_sbp_saved >= 0) {
         mix_write(base, SBP_OUT_CTRL, (uint8_t)st_sbp_saved);
@@ -1059,6 +1093,175 @@ int st_print_report() {
         ok &= print_count(&st_count[PCMX_SEP16]);
         printf("\n");
     }
+    if (ess_failed) {
+        printf("  WARNING: ESS Extended mode not accepted, 16-bit not played\n");
+        ok = 0;
+    }
 
     return ok;
+}
+
+/* ======================================================================
+ * ESS ES18xx Extended mode, 16-bit stereo
+ *
+ * DSP 3.01 in compatibility mode only plays 16-bit stereo to 11 kHz.
+ * Extended mode plays it to 48 kHz on the same 8-bit DMA channel, the
+ * FIFO gets bytes: low, high, first channel, then the second. The data
+ * sheet says left first, measured on an ES1868/9 the first plays right
+ *
+ * Its registers are written as command, value (0xA1 then the divider)
+ * and read with 0xC0, register. The mono and 8-bit stereo blocks stay
+ * in compatibility mode: the data sheet advises against mixing the two,
+ * Extended mode starts at the 16-bit section with a reset and ends with
+ * one in pcm_finish().
+ *
+ * One start plays a whole tone as for the SB16: the 8237 loops the
+ * buffer and the ES18xx counter reloads at each loop, one IRQ each.
+ * Tones of more than one loop start in auto-initialize, and once the
+ * IRQ of the next to last loop came, ess_poll() (once per frame) turns
+ * auto-initialize off so the counter stops after the last one. A loop
+ * is 93 ms or more, several frames to see it.
+ *
+ * From the ES1869 data sheet, "Extended Mode Audio 1 DAC Operation" and
+ * the Audio 1 controller registers
+ * ====================================================================== */
+
+#define ESS_RESET_FIFO  3       /* to the reset port: reset and clear the FIFO */
+#define ESS_EXT_ON      0xC6    /* enables the Extended mode commands */
+#define ESS_READ_REG    0xC0
+#define ESS_RATE        0xA1    /* bit 7: 795.5 kHz / (256 - x) */
+#define ESS_FILTER      0xA2    /* 7.16 MHz / (256 - x), roll-off at 1/82 */
+#define ESS_COUNT_LO    0xA4    /* bytes per IRQ, two's complement */
+#define ESS_COUNT_HI    0xA5
+#define ESS_ANALOG      0xA8    /* bits 1-0: 01 stereo, 10 mono */
+#define ESS_IRQ_CTRL    0xB1
+#define ESS_DRQ_CTRL    0xB2
+#define ESS_DAC_HOLD    0xB6    /* 0x00 sets up the DAC for signed data */
+#define ESS_CTRL1       0xB7    /* FIFO format */
+#define ESS_CTRL2       0xB8    /* bit 2 auto-initialize, bit 0 run */
+/* Transfer type, bits 1-0. The register table has 01 single, 10 and
+ * 11 demand (2 and 4 bytes) and 00 reserved, the programming steps 00
+ * single and 01 demand. 01 works either way: the 8237 in single mode
+ * takes a byte per request and serves a demand request byte by byte */
+#define ESS_XFER_TYPE   0xB9
+#define ESS_SINGLE      0x01
+
+/* 795.5 kHz / 18 = 44194 Hz by the data sheet, measured 44110.8 Hz:
+ * the clock source runs at ~794.0 kHz */
+#define ESS_RATE_DIV    238
+/* Roll-off at ~80% of half the rate: 17677 Hz * 82 = 1.45 MHz,
+ * 7.16 MHz / 5 = 1.432 MHz, 17.5 kHz */
+#define ESS_FILTER_DIV  251
+#define ESS_IRQ_ON      0x50    /* bit 6 counter IRQ, bit 4 set, data sheet step 6 */
+#define ESS_DRQ_ON      0x50    /* bit 6 Extended mode DRQ, bit 4 set */
+/* Data sheet Table 16, stereo 16-bit signed: 0x71, then 0xBC
+ * (FIFO on, signed, stereo, 16-bit) */
+#define ESS_FMT_INIT    0x71
+#define ESS_FMT_S16ST   0xBC
+#define ESS_RUN         0x01
+#define ESS_AUTO        0x04
+
+unsigned ess_loops;             /* loops of the tone playing */
+int      ess_auto;              /* auto-initialize still on */
+
+int ess_write(uint8_t reg, uint8_t val) {
+    return dsp_write(base, reg) && dsp_write(base, val);
+}
+
+int ess_read(uint8_t reg) {
+    if (!dsp_write(base, ESS_READ_REG) || !dsp_write(base, reg))
+        return -1;
+    return dsp_read(base);
+}
+
+/* As dsp_reset() with the FIFO cleared too */
+int ess_reset() {
+    outp(base + 6, ESS_RESET_FIFO);
+    pit_delay_us(5);
+    outp(base + 6, 0);
+    return dsp_read(base) == 0xAA;
+}
+
+/* Reset into Extended mode, 16-bit signed stereo at 44111 Hz */
+int ess_setup() {
+    int analog;
+
+    ess_active = 0;
+    if (!ess_reset() || !dsp_write(base, ESS_EXT_ON))
+        return 0;
+
+    analog = ess_read(ESS_ANALOG);
+    if (analog < 0)
+        return 0;
+
+    ess_write(ESS_CTRL2, 0);                    /* DAC direction, stopped */
+    ess_write(ESS_ANALOG, (uint8_t)((analog & ~3) | 1));
+    ess_write(ESS_XFER_TYPE, ESS_SINGLE);
+    ess_write(ESS_RATE, ESS_RATE_DIV);
+    ess_write(ESS_FILTER, ESS_FILTER_DIV);
+    ess_write(ESS_DAC_HOLD, 0x00);
+    ess_write(ESS_CTRL1, ESS_FMT_INIT);
+    ess_write(ESS_CTRL1, ESS_FMT_S16ST);
+    ess_write(ESS_IRQ_CTRL, ESS_IRQ_ON);
+    ess_write(ESS_DRQ_CTRL, ESS_DRQ_ON);
+    /* The reset took the DAC off the mixer. The gap before the clock
+     * gives it the ~100 ms the data sheet asks for */
+    dsp_write(base, DSP_SPEAKER_ON);
+
+    if (ess_read(ESS_RATE) != ESS_RATE_DIV)
+        return 0;
+    ess_active = 1;
+    return 1;
+}
+
+int ess_play(void __far *buf, unsigned frames, unsigned loops) {
+    uint16_t bytes  = (uint16_t)(4 * frames);   /* under 21.5 KB */
+    uint16_t reload = (uint16_t)(0 - bytes);
+
+    if (!ess_active)
+        return 0;
+
+    ess_write(ESS_CTRL2, 0);
+    dma_program((uint8_t __far *)buf, bytes, DMA_MODE_AUTO);
+    ess_write(ESS_COUNT_LO, (uint8_t)(reload & 0xFF));
+    ess_write(ESS_COUNT_HI, (uint8_t)(reload >> 8));
+
+    ess_loops   = loops;
+    ess_auto    = loops > 1;
+    st_irq_need = loops;
+    return ess_write(ESS_CTRL2, (uint8_t)(ess_auto ? ESS_AUTO | ESS_RUN : ESS_RUN));
+}
+
+void ess_poll() {
+    if (ess_auto && st_pending >= 0 && irq_count - st_irq_base >= ess_loops - 1) {
+        ess_write(ESS_CTRL2, ESS_RUN);
+        ess_auto = 0;
+    }
+}
+
+/* Back to compatibility mode */
+void ess_end() {
+    if (!ess_active)
+        return;
+
+    ess_write(ESS_CTRL2, 0);
+    ess_auto   = 0;
+    ess_active = 0;
+    ess_reset();
+}
+
+/* ESS mixer 0x0E back as it was, then into Extended mode. */
+void pcmx_begin16() {
+    if (!st_ess || !ready)
+        return;
+
+    if (st_sbp_saved >= 0) {
+        mix_write(base, SBP_OUT_CTRL, (uint8_t)st_sbp_saved);
+        st_sbp_saved = -1;
+    }
+    if (!ess_setup()) {
+        ess_failed = 1;
+        st16_ok    = 0;
+        recover();
+    }
 }

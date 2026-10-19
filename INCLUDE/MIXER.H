@@ -20,6 +20,8 @@ void mixer_restore();
 
 /* Mixer register access, used by pcm.c */
 uint8_t mix_read(uint16_t base, uint8_t reg);
+/* ESS ES18xx, by the ID at mixer 0x40 */
+int     is_ess(uint16_t base);
 void    mix_write(uint16_t base, uint8_t reg, uint8_t val);
 
 #endif

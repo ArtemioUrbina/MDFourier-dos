@@ -29,7 +29,7 @@ void pcm_steps_end(pcm_steps_t kind);
 /* ---- Stereo and 16-bit ----
  * Played only when supported
  * 8-bit stereo on DSP 3.xx and 4.xx
- * 16-bit stereo on DSP 4.xx with BLASTER H
+ * 16-bit stereo on DSP 4.xx with BLASTER H and on ESS ES18xx in Extended mode
  * Elsewhere the blocks stay silent and the sequence keeps its timing */
 
 #define PCMX_SWEEP_STEPS 64     /* 25 Hz to 20 kHz */
@@ -52,6 +52,8 @@ typedef enum {
 } pcmx_kind_t;
 
 void pcmx_begin();
+/* Puts ESS ES18xx in Extended mode */
+void pcmx_begin16();
 void pcmx_step_fill(pcmx_kind_t kind, unsigned step);
 void pcmx_step_start(pcmx_kind_t kind);
 void pcmx_steps_end(pcmx_kind_t kind);

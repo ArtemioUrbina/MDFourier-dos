@@ -43,7 +43,7 @@ int main(int argc, char *argv[]) {
     double        hz;
     int           stereo, i, set_mixer = 1, report_only = 0, mixer, mixer_ok, result;
 
-    printf("MDFourier DOS Artemio Urbina 2026\n");
+    printf("MDFourier DOS 0.95 - Artemio Urbina 2026\n");
 
     for (i = 1; i < argc; i++) {
         char opt = 0;
