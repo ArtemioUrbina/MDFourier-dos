@@ -90,11 +90,15 @@ void pulse_prepare(uint8_t channel) {
  * ========================================================================
  * Card                         Fm Chip     Chip ID Tone    Estimated Clock
  * ========================================================================
- * Soundblaster 2.0 CT1350B     OPL2        6002.3139Hz     49717.8503Hz
- * SoundBlaster 16  CT1740      OPL3        6003.2374Hz     49725.4998Hz
- * Yamaha Audician 32 Plus      OPL3-SAx    5978.3547Hz     49519.3937Hz
- * Compaq ES1869                ESS ESFM    5991.0690Hz     49624.7075Hz
+ * Soundblaster 2.0 CT1350B     OPL2        6003.2305Hz     49725.4422Hz
+ * SoundBlaster 16  CT1740      OPL3        6003.2335Hz     49725.4678Hz
+ * SoundBlaster Vibra 16        CQM         6012.7485Hz     49804.2813Hz
+ * Yamaha Audician 32 Plus      OPL3-SAx    5978.3358Hz     49519.2370Hz
+ * Compaq ES1869                ESS ESFM    5991.0632Hz     49624.6592Hz
+ * ESS Solo-1 ES1938            ESS ESFM    5990.1905Hz     49617.4307Hz
  * ========================================================================
+ * The SB 2.0 and SB16 FM clocks seem to come from the ISA bus 14.31818 MHz
+ * (/ 288 = 49715.9 Hz) so they might follow the PC, not the card.
  */
 
 void tone_hold(uint8_t channel, unsigned frames) {
@@ -136,7 +140,7 @@ void sweep_prepare(uint8_t channel, opl_instrument_t instrument) {
 }
 
 /* Left and right start one write apart */
-void sweep_note_on(uint8_t channel, const sweep_note_t *n, int set_mult) {
+void sweep_note_on(uint8_t channel, sweep_note_t *n, int set_mult) {
     if (set_mult) {
         opl_set_carrier_mult(channel, n->mult);
         if (stereo)
@@ -171,7 +175,7 @@ void note_frames(uint8_t channel, unsigned frames) {
     }
 }
 
-void run_sweep(uint8_t channel, unsigned frames, const sweep_note_t *notes, unsigned steps, int set_mult) {
+void run_sweep(uint8_t channel, unsigned frames, sweep_note_t *notes, unsigned steps, int set_mult) {
     unsigned step;
 
     for (step = 0; step < steps && !aborted; step++) {
@@ -239,7 +243,7 @@ void step_set(uint8_t channel, steps_t kind, unsigned step) {
  * vibrato or carrier waveform.
  * Must be entered right after a vsync_wait(), instrument loaded */
 void run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
-    const sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
+    sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
     unsigned step;
 
     for (step = 0; step < steps && !aborted; step++) {
@@ -340,6 +344,7 @@ void pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
  * MDFourier skips those types when their clock block has no tone */
 #define FILLER_HZ       440
 #define FILLER_LEVEL    20      /* carrier attenuation, 0.75 dB steps: -15 dB */
+#define FILLER_DECAY    10
 
 void filler_on(uint8_t channel) {
     if (stereo)
@@ -352,7 +357,7 @@ void filler_on(uint8_t channel) {
 
 void pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned frames, int next_kind) {
     unsigned step, frame;
-    int      filler = !st_enabled(kind) && kind != PCMX_CLK8 && kind != PCMX_CLK16;
+    int      filler = !pcmx_enabled(kind) && kind != PCMX_CLK8 && kind != PCMX_CLK16;
 
     if (filler && !aborted)
         filler_on(channel);
@@ -364,9 +369,12 @@ void pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned fram
             pcmx_step_fill(kind, step + 1);
         else if (next_kind >= 0)
             pcmx_step_fill((pcmx_kind_t)next_kind, 0);
-        for (frame = 0; frame < frames; frame++)
+        for (frame = 0; frame < frames; frame++) {
+            if (filler && step + 1 == steps && frame + FILLER_DECAY == frames)
+                opl_note_off(channel);
             if (!next_frame())
                 break;
+        }
     }
     if (filler)
         opl_note_off(channel);
@@ -428,19 +436,16 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     gap(channel, SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
     tone_hold(channel, WM_FRAMES);                              
 
-#ifndef QUICK_TEST
     /* FM */
     gap(channel, SILENCE_FRAMES, PREP_FM);
     run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);          
     silence(DECAY_FRAMES);
-#endif
 
     /* SINE */
     gap(channel, SILENCE_FRAMES, PREP_SINE);
     run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
     silence(DECAY_FRAMES);
 
-#ifndef QUICK_TEST
     /* DEPTH */
     gap(channel, SILENCE_FRAMES, PREP_DEPTH);
     run_steps(channel, STEPS_DEPTH, DEPTH_STEPS, STEP_FRAMES);         
@@ -461,7 +466,6 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
     /* WAVE */
     gap(channel, SILENCE_FRAMES, PREP_SINE);
     run_steps(channel, STEPS_WAVE, WAVE_STEPS, STEP_FRAMES);
-#endif
 
     /* PCM, 8-bit mono */
     if (!aborted)

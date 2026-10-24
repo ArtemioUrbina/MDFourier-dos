@@ -48,7 +48,7 @@ typedef struct {
     uint8_t  mult;
 } sweep_note_t;
 
-const sweep_note_t sweep[] = {
+sweep_note_t sweep[] = {
     { 0,  422,  1 },  /*   0:    20.00 Hz ->    20.01 Hz */
     { 0,  441,  1 },  /*   1:    20.92 Hz ->    20.91 Hz */
     { 0,  462,  1 },  /*   2:    21.89 Hz ->    21.90 Hz */
@@ -181,7 +181,7 @@ const sweep_note_t sweep[] = {
 
 #define SWEEP_STEPS  (sizeof(sweep) / sizeof(sweep[0]))
 
-const sweep_note_t sine_sweep[] = {
+sweep_note_t sine_sweep[] = {
     { 0,  422,  1 },  /*   0:    20.00 Hz ->    20.01 Hz */
     { 0,  445,  1 },  /*   1:    21.12 Hz ->    21.10 Hz */
     { 0,  470,  1 },  /*   2:    22.30 Hz ->    22.28 Hz */

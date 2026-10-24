@@ -62,8 +62,8 @@ double played(int block, int fnum) {
 }
 
 /* Carrier MULT values and their register codes */
-static const int mult_value[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
-static const int mult_code[]  = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
+int mult_value[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
+int mult_code[]  = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
 
 int sine_regs(double freq, int *block, int *fnum, int *code, double *play) {
     int m;
@@ -164,13 +164,13 @@ int main() {
     printf("    uint16_t fnum;\n");
     printf("    uint8_t  mult;\n");
     printf("} sweep_note_t;\n\n");
-    printf("const sweep_note_t sweep[] = {\n");
+    printf("sweep_note_t sweep[] = {\n");
     for (i = 0; i < STEPS; i++)
         printf("    { %d, %4d,  1 }%s  /* %3d: %8.2f Hz -> %8.2f Hz */\n",
                block[i], fnum[i], i < STEPS - 1 ? "," : " ", i, freq[i], play[i]);
     printf("};\n\n");
     printf("#define SWEEP_STEPS  (sizeof(sweep) / sizeof(sweep[0]))\n\n");
-    printf("const sweep_note_t sine_sweep[] = {\n");
+    printf("sweep_note_t sine_sweep[] = {\n");
     for (i = 0; i < SINE_STEPS; i++)
         printf("    { %d, %4d, %2d }%s  /* %3d: %8.2f Hz -> %8.2f Hz */\n",
                sblock[i], sfnum[i], smult[i], i < SINE_STEPS - 1 ? "," : " ", i, sfreq[i], splay[i]);

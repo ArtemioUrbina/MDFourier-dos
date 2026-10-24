@@ -2,11 +2,11 @@
 #include "opl.h"
 #include "pit.h"
 
-const uint16_t opl_port = 0x388;
+uint16_t opl_port = 0x388;
 
-static int opl3_found = 0;
+int opl3_found = 0;
 
-static void opl_write_port(uint16_t port, uint8_t reg, uint8_t val)
+void opl_write_port(uint16_t port, uint8_t reg, uint8_t val)
 {
     outp(port, reg);
     /* index write settle time >= 3.3us */
@@ -25,7 +25,7 @@ void opl_write(uint8_t reg, uint8_t val)
  * OPL3 second register bank (0x100-0x1FF) at base+2 / base+3.
  * Only call on OPL3
  */
-static void opl_write_bank1(uint8_t reg, uint8_t val)
+void opl_write_bank1(uint8_t reg, uint8_t val)
 {
     opl_write_port((uint16_t)(opl_port + 2), reg, val);
 }

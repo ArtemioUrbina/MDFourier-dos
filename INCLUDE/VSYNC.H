@@ -25,6 +25,6 @@ void vsync_wait();
 void vsync_end(vsync_stats_t *stats);
 unsigned long vsync_first_bad();
 
-void vsync_print_stats(const vsync_stats_t *stats, unsigned long expected);
+void vsync_print_stats(vsync_stats_t *stats, unsigned long expected);
 
 #endif

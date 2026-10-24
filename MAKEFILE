@@ -5,7 +5,6 @@
 # Usage:
 #   wmake            build mdf.exe (release)
 #   wmake DEBUG=1    build with debug info (after wmake clean)
-#   wmake QUICK=1    short test run, CHIPID, MIXER, Sine and PCM (after wmake clean)
 #   wmake clean      remove build output
 
 BIN  = mdf.exe
@@ -13,11 +12,11 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h &
+       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\dsp.obj build\pcm.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
@@ -33,13 +32,6 @@ CFLAGS = -q -bt=dos -ms -0 -fpi -i=include
 !ifdef DEBUG
 CFLAGS += -d2
 !endif
-
-# wmake QUICK=1 builds the short test run (after wmake clean)
-!ifdef QUICK
-CFLAGS += -dQUICK_TEST
-!endif
-
-
 
 all: $(BIN) .SYMBOLIC
 
@@ -59,6 +51,15 @@ build\dsp.obj: src\dsp.c $(HDRS)
 
 build\pcm.obj: src\pcm.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\pcm.c
+
+build\ess.obj: src\ess.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\ess.c
+
+build\wss.obj: src\wss.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\wss.c
+
+build\sax.obj: src\sax.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\sax.c
 
 build\env.obj: src\env.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\env.c

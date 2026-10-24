@@ -4,6 +4,9 @@
 #include <ctype.h>
 #include "env.h"
 
+int verbose = 0;
+wss_cfg_t wss_cfg;
+
 int parse_number(char *str, uint8_t base) {
     uint8_t  digit = 0;
     uint16_t value = 0;
@@ -84,7 +87,7 @@ int env_get_blaster(blaster_cfg_t *cfg) {
 }
 
 void print_env(blaster_cfg_t *cfg) {
-    printf("BLASTER: ");
+    printf(" BLASTER: ");
     if(cfg->port != -1)
         printf("port=0x%03X ", cfg->port);
     if(cfg->irq != -1)
@@ -98,4 +101,46 @@ void print_env(blaster_cfg_t *cfg) {
     if(cfg->type != -1)
         printf("type=%d ", cfg->type);
     printf("\n");
+}
+
+/* AUTO, OFF or port,irq,dma with the port in hex: 530,7,3 */
+int env_parse_wss(char *arg) {
+    char word[8];
+    int  i, port;
+
+    for (i = 0; i < 7 && arg[i] && arg[i] != ','; i++)
+        word[i] = (char)toupper((unsigned char)arg[i]);
+    word[i] = 0;
+
+    if (!strcmp(word, "AUTO") && !arg[i]) {
+        wss_cfg.mode = WSS_AUTO;
+        return 1;
+    }
+    if (!strcmp(word, "OFF") && !arg[i]) {
+        wss_cfg.mode = WSS_OFF;
+        return 1;
+    }
+    /* parse_number stops at the comma, -1 without a digit */
+    port = parse_number((char *)arg, 16);
+    while (*arg && *arg != ',')
+        arg++;
+    if (*arg++ != ',')
+        return 0;
+    wss_cfg.irq = parse_number((char *)arg, 10);
+    while (*arg && *arg != ',')
+        arg++;
+    if (*arg++ != ',')
+        return 0;
+    wss_cfg.dma = parse_number((char *)arg, 10);
+    while (*arg >= '0' && *arg <= '9')
+        arg++;
+
+    if (port <= 0 || *arg || wss_cfg.irq < 2 || wss_cfg.irq > 15 ||
+        wss_cfg.dma < 0 || wss_cfg.dma > 3 || wss_cfg.dma == 2)
+        return 0;
+    wss_cfg.port = (unsigned)port;
+    if (wss_cfg.irq == 2)
+        wss_cfg.irq = 9;
+    wss_cfg.mode = WSS_MANUAL;
+    return 1;
 }

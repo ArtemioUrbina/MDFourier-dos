@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <conio.h>
 #include "mixer.h"
+#include "dsp.h"
 
 /* Sources:
  * https://pdos.csail.mit.edu/6.828/2017/readings/hardware/SoundBlaster.pdf
@@ -56,7 +57,7 @@ typedef struct {
     uint8_t check;
 } mix_std_t;
 
-static const mix_std_t sb16_std[] = {
+mix_std_t sb16_std[] = {
     { SB16_MASTER,     0xF8, 0xF8, 0xF8 },  /* 0 dB */
     { SB16_MASTER + 1, 0xF8, 0xF8, 0xF8 },
     { SB16_FM,         0xF8, 0xF8, 0xF8 },
@@ -74,7 +75,7 @@ static const mix_std_t sb16_std[] = {
 };
 
 /* Match on ESS, the low bits are ignored on a real SB Pro */
-static const mix_std_t sbpro_std[] = {
+mix_std_t sbpro_std[] = {
     { SBP_MASTER,      0xFF, 0xFF, 0xEE },  /* max */
     { SBP_FM,          0xFF, 0xFF, 0xEE },
     { SBP_VOICE,       0xFF, 0xFF, 0xEE },  /* PCM max, on ESS 0 dB */
@@ -84,7 +85,7 @@ static const mix_std_t sbpro_std[] = {
 };
 
 /* In ESS set the extended registers, after the SB Pro view */
-static const mix_std_t ess_std[] = {
+mix_std_t ess_std[] = {
     { ESS_MASTER,      0x7F, 0x3F, 0x7F },  /* max, not muted */
     { ESS_MASTER + 2,  0x7F, 0x3F, 0x7F },
     { ESS_FM,          0xFF, 0x88, 0xFF },  /* 0 dB, 15 is +10.5 dB */
@@ -92,7 +93,7 @@ static const mix_std_t ess_std[] = {
     { ESS_CD,          0xFF, 0x00, 0xFF },  /* muted */
     { ESS_LINE,        0xFF, 0x00, 0xFF },
     { ESS_MIC,         0xFF, 0x00, 0xFF },
-    { ESS_AUX,         0xFF, 0x00, 0xFF },
+    { ESS_AUX,         0xFF, 0x00, 0xFF }, 
     { ESS_MONOIN,      0xFF, 0x00, 0xFF },
     { ESS_PCSPK,       0x07, 0x00, 0x07 },
     { ESS_MONOMIX,     0x01, 0x00, 0x01 },  /* no mono in after master */
@@ -102,10 +103,10 @@ static const mix_std_t ess_std[] = {
 /* Previous state, for mixer_restore(), in write order */
 #define MIX_SAVE_MAX 24
 
-static uint16_t saved_base;
-static unsigned saved_count;
-static uint8_t  saved_reg[MIX_SAVE_MAX];
-static uint8_t  saved_val[MIX_SAVE_MAX];
+uint16_t saved_base;
+unsigned saved_count;
+uint8_t  saved_reg[MIX_SAVE_MAX];
+uint8_t  saved_val[MIX_SAVE_MAX];
 
 uint8_t mix_read(uint16_t base, uint8_t reg) {
     outp(base + MIX_INDEX, reg);
@@ -130,9 +131,29 @@ int mix_present(uint16_t base, uint8_t reg, uint8_t mask) {
     return ((got ^ test) & mask) == 0;
 }
 
-/* ES18xx identification */
+/* ESS identification: DSP command E7h answers 68h, 8xh on the ES688,
+ * ES1688, the ES18xx and the Solo-1 in legacy mode. Mixer 0x40 reads
+ * 18h only on the ES18x8/9, a Solo-1 reads 19h.
+ * Asked at startup with DSP resets around it
+ * unknown command on a Creative DSP only times out */
+#define DSP_ESS_ID  0xE7
+
+int ess_found = -1;
+
 int is_ess(uint16_t base) {
-    return mix_read(base, ESS_ID) == 0x18;
+    if (ess_found < 0) {
+        ess_found = 0;
+        if (dsp_reset(base) && dsp_write(base, DSP_ESS_ID)) {
+            int id_hi = dsp_read(base);
+            int id_lo = dsp_read(base);
+
+            ess_found = id_hi == 0x68 && (id_lo & 0xF0) == 0x80;
+        }
+        dsp_reset(base);
+        if (!ess_found && mix_read(base, ESS_ID) == 0x18)
+            ess_found = 1;
+    }
+    return ess_found;
 }
 
 int sb16_db(uint8_t val) {
@@ -141,7 +162,7 @@ int sb16_db(uint8_t val) {
 
 int report_sb16(uint16_t base) {
     uint8_t mstl, mstr, fml, fmr, vol, vor, outsw, gl, gr, tl, tr, bl, br, mic, pcspk;
-    int warn = 0;
+    int warn, low, boost, tone0, tone, other;
 
     vol   = mix_read(base, SB16_VOICE);
     vor   = mix_read(base, SB16_VOICE + 1);
@@ -159,46 +180,45 @@ int report_sb16(uint16_t base) {
     mic   = (uint8_t)(mix_read(base, SB16_MIC) >> 3);
     pcspk = (uint8_t)(mix_read(base, SB16_PCSPK) >> 6);
 
-    printf("Mixer: SB16, master %d/%d dB, FM %d/%d dB, voice %d/%d dB, gain x%d/x%d\n",
-           sb16_db(mstl), sb16_db(mstr), sb16_db(fml), sb16_db(fmr),
-           sb16_db(vol), sb16_db(vor), 1 << gl, 1 << gr);
-    printf("       treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
-           tl, tr, bl, br, 6 * pcspk - 18);
-    printf("       to output:%s%s%s%s\n",
-           (outsw & 0x06) ? " CD" : "", (outsw & 0x18) ? " line" : "",
-           (outsw & 0x01) ? " mic" : "", (outsw & 0x1F) ? "" : " none");
-
-    if ((mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31 ||
-        (vol >> 3) != 31 || (vor >> 3) != 31) {
-        printf("  WARNING: master, FM or voice below 0 dB\n");
-        warn = 1;
-    }
-    if (gl || gr) {
-        printf("  WARNING: output gain boosted, may clip\n");
-        warn = 1;
-    }
+    low   = (mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31 ||
+            (vol >> 3) != 31 || (vor >> 3) != 31;
+    boost = gl || gr;
     /* All zero: real SB16 at minimum, or DOSBox, which starts them at
      * 0 and doesn't emulate tone controls. Can't tell which */
-    if (!tl && !tr && !bl && !br) {
-        printf("  NOTE: treble/bass read 0. minimum on a SB16 or DOSBox\n");
-        warn = 1;
-    } else if (tl < 7 || tl > 8 || tr < 7 || tr > 8 ||
-               bl < 7 || bl > 8 || br < 7 || br > 8) {
-        printf("  WARNING: treble/bass not flat, alters the frequency response\n");
-        warn = 1;
-    }
+    tone0 = !tl && !tr && !bl && !br;
+    tone  = !tone0 && (tl < 7 || tl > 8 || tr < 7 || tr > 8 || bl < 7 || bl > 8 || br < 7 || br > 8);
     /* CD, line, mic with any volume */
-    if ((outsw & 0x1E) || ((outsw & 0x01) && mic)) {
+    other = (outsw & 0x1E) || ((outsw & 0x01) && mic);
+    warn  = low || boost || tone0 || tone || other || pcspk;
+
+    /* The levels only when asked or when something is off */
+    if (verbose || warn) {
+        printf(" Mixer: SB16, master %d/%d dB, FM %d/%d dB, voice %d/%d dB, gain x%d/x%d\n",
+               sb16_db(mstl), sb16_db(mstr), sb16_db(fml), sb16_db(fmr),
+               sb16_db(vol), sb16_db(vor), 1 << gl, 1 << gr);
+        printf("        treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
+               tl, tr, bl, br, 6 * pcspk - 18);
+        printf("        to output:%s%s%s%s\n",
+               (outsw & 0x06) ? " CD" : "", (outsw & 0x18) ? " line" : "",
+               (outsw & 0x01) ? " mic" : "", (outsw & 0x1F) ? "" : " none");
+    }
+
+    if (low)
+        printf("  WARNING: master, FM or voice below 0 dB\n");
+    if (boost)
+        printf("  WARNING: output gain boosted, may clip\n");
+    if (tone0)
+        printf("  NOTE: treble/bass read 0: minimum on an SB16, or DOSBox\n");
+    if (tone)
+        printf("  WARNING: treble/bass not flat, alters the frequency response\n");
+    if (other)
         printf("  WARNING: other inputs mixed into the output, adds noise\n");
-        warn = 1;
-    }
     /* Can't be muted, set to minimum */
-    if (pcspk) {
+    if (pcspk)
         printf("  WARNING: PC speaker above minimum, may add noise\n");
-        warn = 1;
-    }
+
     if (!warn) {
-        printf("Mixer: OK for capture\n");
+        printf(" Mixer: SB16, OK for capture\n");
         return MIXER_OK;
     }
     return MIXER_WARN;
@@ -207,7 +227,7 @@ int report_sb16(uint16_t base) {
 /* Only tested in DosBox */
 int report_sbpro(uint16_t base) {
     uint8_t mst, fm, voice, cd, line, mic;
-    int warn = 0;
+    int warn, low, other;
 
     voice = mix_read(base, SBP_VOICE);
     mst  = mix_read(base, SBP_MASTER);
@@ -216,23 +236,26 @@ int report_sbpro(uint16_t base) {
     line = mix_read(base, SBP_LINE);
     mic  = (uint8_t)((mix_read(base, SBP_MIC) >> 1) & 0x03);
 
-    printf("Mixer: SB Pro, master %u/%u, FM %u/%u, voice %u/%u (7 = 0 dB)\n",
-           mst >> 5, (mst >> 1) & 7, fm >> 5, (fm >> 1) & 7,
-           voice >> 5, (voice >> 1) & 7);
-    printf("       CD %u/%u, line %u/%u (0 = -46 dB), mic %u/3\n",
-           cd >> 5, (cd >> 1) & 7, line >> 5, (line >> 1) & 7, mic);
-
     /* bits 4 and 0 are unused, 0xEE is max */
-    if ((mst & 0xEE) != 0xEE || (fm & 0xEE) != 0xEE || (voice & 0xEE) != 0xEE) {
+    low   = (mst & 0xEE) != 0xEE || (fm & 0xEE) != 0xEE || (voice & 0xEE) != 0xEE;
+    other = (cd & 0xEE) || (line & 0xEE) || mic;
+    warn  = low || other;
+
+    if (verbose || warn) {
+        printf(" Mixer: SB Pro, master %u/%u, FM %u/%u, voice %u/%u (7 = 0 dB)\n",
+               mst >> 5, (mst >> 1) & 7, fm >> 5, (fm >> 1) & 7,
+               voice >> 5, (voice >> 1) & 7);
+        printf("        CD %u/%u, line %u/%u (0 = -46 dB), mic %u/3\n",
+               cd >> 5, (cd >> 1) & 7, line >> 5, (line >> 1) & 7, mic);
+    }
+
+    if (low)
         printf("  WARNING: master, FM or voice below max\n");
-        warn = 1;
-    }
-    if ((cd & 0xEE) || (line & 0xEE) || mic) {
+    if (other)
         printf("  WARNING: CD, line or mic not muted, adds noise\n");
-        warn = 1;
-    }
+
     if (!warn) {
-        printf("Mixer: OK for capture\n");
+        printf(" Mixer: SB Pro, OK for capture\n");
         return MIXER_OK;
     }
     return MIXER_WARN;
@@ -241,7 +264,7 @@ int report_sbpro(uint16_t base) {
 /* ESS extended registers, the SB Pro view hides mutes */
 int report_ess(uint16_t base) {
     uint8_t mstl, mstr, fm, voice, cd, line, mic, aux, mono, pcspk, mmix, d3;
-    int warn = 0;
+    int warn, low, other;
 
     voice = mix_read(base, ESS_VOICE);
     mstl  = mix_read(base, ESS_MASTER);
@@ -256,37 +279,34 @@ int report_ess(uint16_t base) {
     mmix  = (uint8_t)(mix_read(base, ESS_MONOMIX) & 0x01);
     d3    = (uint8_t)(mix_read(base, ESS_3D) & 0x08);
 
-    printf("Mixer: ESS, master %u/%u%s (63 = max), FM %u/%u (8 = 0 dB), voice %u/%u (14 = 0 dB)%s\n",
-           mstl & 0x3F, mstr & 0x3F, ((mstl | mstr) & 0x40) ? " muted" : "",
-           fm >> 4, fm & 0x0F, voice >> 4, voice & 0x0F, d3 ? ", 3-D on" : "");
-    printf("       CD %u/%u, line %u/%u, mic %u/%u, aux %u/%u, mono in %u/%u, PC speaker %u\n",
-           cd >> 4, cd & 0x0F, line >> 4, line & 0x0F, mic >> 4, mic & 0x0F,
-           aux >> 4, aux & 0x0F, mono >> 4, mono & 0x0F, pcspk);
+    low   = (mstl & 0x7F) != 0x3F || (mstr & 0x7F) != 0x3F;
+    other = cd || line || mic || aux || mono || pcspk || mmix;
+    warn  = low || fm != 0x88 || voice != 0xEE || d3 || other;
 
-    if ((mstl & 0x7F) != 0x3F || (mstr & 0x7F) != 0x3F) {
-        printf("  WARNING: master below max or muted\n");
-        warn = 1;
+    if (verbose || warn) {
+        printf(" Mixer: ESS, master %u/%u%s (63 = max), FM %u/%u (8 = 0 dB), voice %u/%u (14 = 0 dB)%s\n",
+               mstl & 0x3F, mstr & 0x3F, ((mstl | mstr) & 0x40) ? " muted" : "",
+               fm >> 4, fm & 0x0F, voice >> 4, voice & 0x0F, d3 ? ", 3-D on" : "");
+        printf("        CD %u/%u, line %u/%u, mic %u/%u, aux %u/%u, mono in %u/%u, PC speaker %u\n",
+               cd >> 4, cd & 0x0F, line >> 4, line & 0x0F, mic >> 4, mic & 0x0F,
+               aux >> 4, aux & 0x0F, mono >> 4, mono & 0x0F, pcspk);
     }
-    if (fm != 0x88) {
+
+    if (low)
+        printf("  WARNING: master below max or muted\n");
+    if (fm != 0x88)
         printf("  WARNING: FM not at 0 dB, %s\n",
                ((fm >> 4) > 8 || (fm & 0x0F) > 8) ? "boosted, may clip" : "below 0 dB");
-        warn = 1;
-    }
-    if (voice != 0xEE) {
+    if (voice != 0xEE)
         printf("  WARNING: voice not at 0 dB, %s\n",
                ((voice >> 4) > 14 || (voice & 0x0F) > 14) ? "boosted, may clip" : "below 0 dB");
-        warn = 1;
-    }
-    if (d3) {
+    if (d3)
         printf("  WARNING: 3-D effect on, alters the output\n");
-        warn = 1;
-    }
-    if (cd || line || mic || aux || mono || pcspk || mmix) {
+    if (other)
         printf("  WARNING: other inputs not muted, adds noise\n");
-        warn = 1;
-    }
+
     if (!warn) {
-        printf("Mixer: OK for capture\n");
+        printf(" Mixer: ESS, OK for capture\n");
         return MIXER_OK;
     }
     return MIXER_WARN;
@@ -296,7 +316,7 @@ int mixer_report(blaster_cfg_t *cfg) {
     uint16_t base;
 
     if (cfg->port == -1 || cfg->type == -1) {
-        printf("Mixer: check volumes manually\n");
+        printf(" Mixer: check volumes manually\n");
         return MIXER_UNKNOWN;
     }
     base = (uint16_t)cfg->port;
@@ -304,7 +324,7 @@ int mixer_report(blaster_cfg_t *cfg) {
     switch (cfg->type) {
     case 1:
     case 3:
-        printf("Mixer: none (SB 1.x/2.0), set the volume knob manually\n");
+        printf(" Mixer: none (SB 1.x/2.0), set the volume knob manually\n");
         return MIXER_NONE;
     case 2:
     case 4:
@@ -314,7 +334,7 @@ int mixer_report(blaster_cfg_t *cfg) {
             return report_ess(base);
         if (mix_present(base, SBP_VOICE, 0xEE))
             return report_sbpro(base);
-        printf("Mixer: SB Pro expected, not answering (check BLASTER A and T)\n");
+        printf(" Mixer: SB Pro expected, not answering (check BLASTER A and T)\n");
         return MIXER_UNKNOWN;
     case 6:
         /* ESS set up as T6 */
@@ -322,15 +342,15 @@ int mixer_report(blaster_cfg_t *cfg) {
             return report_ess(base);
         if (mix_present(base, SB16_VOICE, 0xF8))
             return(report_sb16(base));
-        printf("Mixer: SB16 expected, not answering (check BLASTER A and T)\n");
+        printf(" Mixer: SB16 expected, not answering (check BLASTER A and T)\n");
         return MIXER_UNKNOWN;
     default:
-        printf("Mixer: unknown type T%d, check volumes manually\n", cfg->type);
+        printf(" Mixer: unknown type T%d, check volumes manually\n", cfg->type);
     }
     return MIXER_UNKNOWN;
 }
 
-void mix_save(uint16_t base, const mix_std_t *std, unsigned count) {
+void mix_save(uint16_t base, mix_std_t *std, unsigned count) {
     unsigned i;
 
     saved_base = base;
@@ -341,7 +361,7 @@ void mix_save(uint16_t base, const mix_std_t *std, unsigned count) {
     }
 }
 
-int mix_set(uint16_t base, const mix_std_t *std, unsigned count) {
+int mix_set(uint16_t base, mix_std_t *std, unsigned count) {
     unsigned i;
     int ok = 1;
 

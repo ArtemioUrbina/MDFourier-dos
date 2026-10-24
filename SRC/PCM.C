@@ -2,8 +2,9 @@
  * PCM through the Sound Blaster DSP
  * 8-bit mono on every DSP
  * 8-bit stereo on DSP 3.xx (SB Pro method) and 4.xx (SB16 commands)
- * 16-bit stereo on DSP 4.xx with a high DMA channel, and on ESS
- * ES18xx through their Extended mode on the 8-bit DMA channel.
+ * 16-bit stereo on DSP 4.xx with a high DMA channel, and through the
+ * drivers in PCMDRV.H: ESS ES18xx Extended mode (ESS.C) and the WSS
+ * codec of the Yamaha OPL3-SAx (WSS.C)
  *
  * MDF.C steps through the sequence one VGA frame at a time.
  * Every tone starts with a single DSP command sent after a frame edge
@@ -12,13 +13,12 @@
  * The DSP plays from memory through DMA. While one tone plays, the
  * next one is built into a second buffer, a chunk per frame, because
  * building a whole tone at once takes longer than a frame on a 486.
- * 
+ *
  * Each transfer raises one IRQ when it ends. Counting them tells if
  * the card really played what it was asked to.
  *
  * Sources:
  * https://pdos.csail.mit.edu/6.828/2017/readings/hardware/SoundBlaster.pdf
- * https://www.philscomputerlab.com/uploads/3/7/2/3/37231621/es1869techmanual.pdf
  * Intel 8237A data sheet (DMA), Intel 8259A data sheet (PIC)
  */
 
@@ -29,18 +29,17 @@
 #include <dos.h>
 #include <i86.h>
 #include "pcm.h"
+#include "pcmdrv.h"
+#include "wss.h"
+#include "sax.h"
 #include "dsp.h"
 #include "mixer.h"
 #include "pit.h"
-
 
 #define DSP_READ_READY  0x0E    /* reading it acks the 8-bit IRQ */
 #define DSP_ACK_16      0x0F    /* reading it acks the 16-bit IRQ, DSP 4.xx */
 #define SB16_IRQ_STATUS 0x82    /* mixer: bit 0 8-bit, bit 1 16-bit */
 
-#define DSP_SPEAKER_ON  0xD1
-#define DSP_SPEAKER_OFF 0xD3
-#define DSP_TIME_CONST  0x40
 #define DSP_PLAY_8BIT   0x14    /* single-cycle, 8-bit mono, every DSP */
 
 /* Rate = 1000000 / (256 - TC). TC 211 gives 22222.2 Hz, in range for
@@ -98,46 +97,30 @@ int8_t amp_sine[AMP_TABLES][SINE_SIZE];
 
 /* DMA buffers: clock, then two steps (one plays while the other is
  * built). From buf_alloc(), with the stereo ones */
-uint8_t __far *clk_buf;
+uint8_t __far *clock_buf;
 uint8_t __far *step_buf[2];
-uint16_t step_len[2];
+uint16_t       step_len[2];
 
-/* 8237 ports, channels 0-3. The page registers (address bits 16-23)
- * are in this odd order since the original PC */
-#define DMA_MASK        0x0A
-#define DMA_MODE        0x0B
-#define DMA_FLIPFLOP    0x0C
-#define DMA_MODE_SINGLE 0x48    /* single, increment, memory to card */
-#define DMA_MODE_AUTO   0x58    /* same, auto-initialize */
-const uint8_t dma_page_port[4] = { 0x87, 0x83, 0x81, 0x82 };
+/* 8237 page registers (address bits 16-23), in this odd order since
+ * the original PC */
+uint8_t dma_page_port[4] = { 0x87, 0x83, 0x81, 0x82 };
 
-/* 8259 ports */
-#define PIC1_CMD        0x20
-#define PIC1_DATA       0x21
-#define PIC2_CMD        0xA0
-#define PIC2_DATA       0xA1
-#define PIC_EOI         0x20
-
-int       ready;            /* pcm_init() passed, everything else checks it */
-uint16_t  base;
-uint8_t   irq, dma;
+int       pcm_ready;        /* pcm_init() passed, everything else checks it */
+uint16_t  sb_base;
+uint8_t   sb_irq, sb_dma;
 uint8_t   dsp_major;        /* picks the commands: 1.xx to 4.xx differ */
 double    frame_rate;       /* measured, sizes the tones to the blocks */
+irq_hook_t sb_hook;         /* put back at exit so DOS keeps working */
 
-/* Put back at exit so DOS keeps working */
-void (__interrupt __far *old_vector)();
-uint8_t   old_pic1, old_pic2;
-int       installed;
-
-/* Transfers ended, from the ISR. */
+/* Transfers ended, from the ISRs */
 volatile unsigned irq_count;
 
-uint16_t          clk_len;       /* clock samples, a whole number of periods */
-int               playing;       /* a transfer may be running */
+uint16_t  clock_len;        /* clock samples, a whole number of periods */
+int       dsp_busy;         /* a transfer may be running */
 
 /* Results */
 typedef struct {
-    const char *name;
+    char        *name;
     unsigned    expected;
     unsigned    got;
 } pcm_count_t;
@@ -150,16 +133,90 @@ pcm_count_t count_steps[2] = { { "sweep", 0, 0 }, { "level", 0, 0 } };
 unsigned step_irq_base;
 int      step_pending;
 
+/* The 16-bit stereo driver, NULL when 16-bit doesn't play */
+pcm16_driver_t *pcm16;
+
+/* Stereo and 16-bit, below */
 int  buf_alloc(int stereo);
-void st_init(blaster_cfg_t *cfg);
-void st_fill_samples(unsigned max_frames);
-void st_finish();
-int  st_print_report();
-void ess_poll();
+void pcmx_init(blaster_cfg_t *cfg);
+void pcmx_fill_samples(unsigned max_frames);
+void pcmx_poll();
+void pcmx_finish();
+int  pcmx_print_report();
+int  pcm_counts_ok();
+unsigned pcm_transfers();
+
+/* ---- 8259 ---- */
 
 /* IRQ 0-7 are vectors 0x08-0x0F, IRQ 8-15 (second PIC) 0x70-0x77 */
-unsigned vector_of(uint8_t irq_line) {
-    return irq_line < 8 ? 0x08 + irq_line : 0x70 + (irq_line - 8);
+unsigned vector_of(uint8_t line) {
+    return line < 8 ? 0x08 + line : 0x70 + (line - 8);
+}
+
+/* To the second PIC as well for IRQ 8-15. It reaches the CPU through
+ * the first one (cascade on IRQ 2) */
+void pic_eoi(uint8_t line) {
+    if (line >= 8)
+        outp(PIC2_CMD, PIC_EOI);
+    outp(PIC1_CMD, PIC_EOI);
+}
+
+/* OCW3 0x0A: the next read of the command port gives the IRR */
+uint16_t pic_irr() {
+    uint16_t lo, hi;
+
+    outp(PIC1_CMD, 0x0A);
+    lo = (uint16_t)inp(PIC1_CMD);
+    outp(PIC2_CMD, 0x0A);
+    hi = (uint16_t)inp(PIC2_CMD);
+    return (uint16_t)(lo | (hi << 8));
+}
+
+uint8_t irq_line_of(uint16_t before, uint16_t during, uint16_t after) {
+    uint16_t raised = (uint16_t)(during & ~before & ~after & IRQ_CANDIDATES);
+    uint8_t  line = 0;
+    int      bit, found = 0;
+
+    for (bit = 0; bit < 16; bit++)
+        if (raised & (1u << bit)) {
+            line = (uint8_t)bit;
+            found++;
+        }
+    return found == 1 ? line : 0;
+}
+
+/* IRQ 8-15 also need IRQ 2 unmasked on the first PIC, the second one
+ * goes through it */
+void irq_hook_install(irq_hook_t *hook, uint8_t line, void (__interrupt __far *isr)()) {
+    _disable();
+
+    hook->line       = line;
+    hook->old_vector = _dos_getvect(vector_of(line));
+    _dos_setvect(vector_of(line), isr);
+    hook->old_pic1 = (uint8_t)inp(PIC1_DATA);
+    if (line >= 8) {
+        hook->old_pic2 = (uint8_t)inp(PIC2_DATA);
+        outp(PIC2_DATA, hook->old_pic2 & ~(1 << (line - 8)));
+        outp(PIC1_DATA, hook->old_pic1 & ~(1 << 2));        /* cascade */
+    } else
+        outp(PIC1_DATA, hook->old_pic1 & ~(1 << line));
+
+    _enable();
+    hook->installed = 1;
+}
+
+void irq_hook_remove(irq_hook_t *hook) {
+    if (!hook->installed)
+        return;
+
+    _disable();
+    if (hook->line >= 8)
+        outp(PIC2_DATA, hook->old_pic2);
+    outp(PIC1_DATA, hook->old_pic1);
+    _dos_setvect(vector_of(hook->line), hook->old_vector);
+    _enable();
+
+    hook->installed = 0;
 }
 
 /* One IRQ per transfer, at its end. The DSP keeps its IRQ line raised
@@ -168,31 +225,64 @@ unsigned vector_of(uint8_t irq_line) {
  * each acked on its own port, mixer 0x82 tells which. If it reads
  * neither (a clone without it), ack the 8-bit one */
 void __interrupt __far pcm_isr() {
+    /* A 16-bit driver sharing the line, the WSS codec */
+    if (pcm16 && pcm16->shared_isr && pcm16->shared_isr()) {
+        pic_eoi(sb_irq);
+        return;
+    }
+
     if (dsp_major >= 4) {
-        uint8_t irq_status = mix_read(base, SB16_IRQ_STATUS);
+        uint8_t irq_status = mix_read(sb_base, SB16_IRQ_STATUS);
 
         if (irq_status & 2)
-            inp(base + DSP_ACK_16);
-            
+            inp(sb_base + DSP_ACK_16);
+
         if ((irq_status & 1) || !(irq_status & 3))
-            inp(base + DSP_READ_READY);
+            inp(sb_base + DSP_READ_READY);
     } else
-        inp(base + DSP_READ_READY);
+        inp(sb_base + DSP_READ_READY);
 
     irq_count++;
-
-    /* End of interrupt, to the second PIC as well for IRQ 8-15. 
-     * It reaches the CPU through the first one (cascade on IRQ 2) */
-    if (irq >= 8)
-        outp(PIC2_CMD, PIC_EOI);
-
-    outp(PIC1_CMD, PIC_EOI);
+    pic_eoi(sb_irq);
 }
+
+void pcm_unhook() {
+    irq_hook_remove(&sb_hook);
+}
+
+/* ---- 8237 ---- */
 
 /* Real mode address: segment * 16 + offset. DMA needs the physical one */
 uint32_t phys_of(void __far *ptr) {
     return ((uint32_t)FP_SEG(ptr) << 4) + FP_OFF(ptr);
 }
+
+/* Channels 0-3. Masked while programming so it can't start halfway.
+ * The flip-flop picks which byte of a 16-bit register the next write
+ * goes to.
+ * Cleared, low byte first.
+ * The count register takes length - 1, it transfers until it counts past 0 */
+void dma_program(uint8_t channel, void __far *buf, uint16_t len, uint8_t mode) {
+    uint32_t phys        = phys_of(buf);
+    uint16_t page_offset = (uint16_t)(phys & 0xFFFF);
+    uint16_t len_minus_1 = (uint16_t)(len - 1);
+
+    outp(DMA_MASK, 0x04 | channel);
+    outp(DMA_FLIPFLOP, 0);
+    outp(DMA_MODE, mode | channel);
+    outp(channel * 2, page_offset & 0xFF);
+    outp(channel * 2, page_offset >> 8);
+    outp(channel * 2 + 1, len_minus_1 & 0xFF);
+    outp(channel * 2 + 1, len_minus_1 >> 8);
+    outp(dma_page_port[channel], (uint8_t)(phys >> 16));
+    outp(DMA_MASK, channel);
+}
+
+void dma_mask(uint8_t channel) {
+    outp(DMA_MASK, 0x04 | channel);
+}
+
+/* ---- DSP ---- */
 
 void build_tables() {
     unsigned pos, table;
@@ -216,42 +306,17 @@ void build_tables() {
     /* sin at rate / 8 starting at 45 degrees: the period's last
      * sample is 0x80 and the next one carries on the same sine */
     for (pos = 0; pos < CLK_MAX; pos++)
-        clk_buf[pos] = (uint8_t)(128 + floor(CLK_AMP *
-                       sin(2.0 * 3.14159265358979 * ((pos % CLK_PERIOD) + 1) / CLK_PERIOD) + 0.5));
-}
-
-/* 8237, channels 0-3. Masked while programming so it can't start
- * halfway. The flip-flop picks which byte of a 16-bit register the
- * next write goes to. 
- * Cleared, low byte first.
- * The count register takes length - 1, it transfers until it counts past 0 */
-void dma_program(uint8_t __far *buf, uint16_t len, uint8_t mode) {
-    uint32_t phys        = phys_of(buf);
-    uint16_t page_offset = (uint16_t)(phys & 0xFFFF);
-    uint16_t len_minus_1 = (uint16_t)(len - 1);
-
-    outp(DMA_MASK, 0x04 | dma);
-    outp(DMA_FLIPFLOP, 0);
-    outp(DMA_MODE, mode | dma);
-    outp(dma * 2, page_offset & 0xFF);
-    outp(dma * 2, page_offset >> 8);
-    outp(dma * 2 + 1, len_minus_1 & 0xFF);
-    outp(dma * 2 + 1, len_minus_1 >> 8);
-    outp(dma_page_port[dma], (uint8_t)(phys >> 16));
-    outp(DMA_MASK, dma);
-}
-
-void dma_mask() {
-    outp(DMA_MASK, 0x04 | dma);
+        clock_buf[pos] = (uint8_t)(128 + floor(CLK_AMP *
+                         sin(2.0 * 3.14159265358979 * ((pos % CLK_PERIOD) + 1) / CLK_PERIOD) + 0.5));
 }
 
 /* A DSP command with a length, which the DSP also takes as length - 1 */
 int dsp_play(uint8_t cmd, uint16_t len) {
     uint16_t len_minus_1 = (uint16_t)(len - 1);
 
-    return dsp_write(base, cmd) &&
-           dsp_write(base, (uint8_t)(len_minus_1 & 0xFF)) &&
-           dsp_write(base, (uint8_t)(len_minus_1 >> 8));
+    return dsp_write(sb_base, cmd) &&
+           dsp_write(sb_base, (uint8_t)(len_minus_1 & 0xFF)) &&
+           dsp_write(sb_base, (uint8_t)(len_minus_1 >> 8));
 }
 
 /* A transfer left running. Stop it and get the DSP back. The reset
@@ -259,98 +324,121 @@ int dsp_play(uint8_t cmd, uint16_t len) {
  * The rate goes before the speaker on: on DSP 1.xx/2.xx that one takes ~112 ms and
  * can drop what follows it */
 void recover() {
-    dma_mask();
-    dsp_reset(base);
-    dsp_write(base, DSP_TIME_CONST);
-    dsp_write(base, PCM_TC);
-    dsp_write(base, DSP_SPEAKER_ON);
-    playing = 0;
+    dma_mask(sb_dma);
+    dsp_reset(sb_base);
+    dsp_write(sb_base, DSP_TIME_CONST);
+    dsp_write(sb_base, PCM_TC);
+    dsp_write(sb_base, DSP_SPEAKER_ON);
+    dsp_busy = 0;
 }
 
-void pcm_uninstall() {
-    if (!installed)
-        return;
+/* The line the DSP raises at the end of a transfer. A wrong BLASTER I
+ * plays every tone but no IRQ counts it: each step is taken as stuck
+ * and reset, which on DSP 3.xx loses the stereo channel order. So a
+ * 16-byte silent transfer with interrupts off, before the handler goes
+ * in, and see which request goes up and drops once the DSP is acked.
+ * 0 if none or more than one line moved */
+#define IRQ_TEST_BYTES  16
+#define IRQ_TEST_WAIT   PIT_US_TO_CLK(20000UL)
+
+uint8_t dsp_probe_irq() {
+    uint16_t before, during, after;
+    uint32_t start;
+    unsigned pos;
+
+    for (pos = 0; pos < IRQ_TEST_BYTES; pos++)
+        step_buf[0][pos] = 0x80;
 
     _disable();
+    dsp_write(sb_base, DSP_TIME_CONST);
+    dsp_write(sb_base, PCM_TC);
+    dma_program(sb_dma, step_buf[0], IRQ_TEST_BYTES, DMA_MODE_SINGLE);
+    before = pic_irr();
+    dsp_play(DSP_PLAY_8BIT, IRQ_TEST_BYTES);
 
-    if (irq >= 8)
-        outp(PIC2_DATA, old_pic2);
-    outp(PIC1_DATA, old_pic1);
-    _dos_setvect(vector_of(irq), old_vector);
+    /* 0.7 ms of samples, the line up soon after */
+    start = pit_now();
+    while (!((pic_irr() & ~before) & IRQ_CANDIDATES))
+        if ((uint32_t)(pit_now() - start) > IRQ_TEST_WAIT)
+            break;
+    during = pic_irr();
 
+    inp(sb_base + DSP_READ_READY);          /* ack, the line drops */
+    after = pic_irr();
+    dma_mask(sb_dma);
     _enable();
 
-    installed = 0;
+    return irq_line_of(before, during, after);
 }
 
-/* Our handler on the card's IRQ, unmasked at the PIC. IRQ 8-15 also
- * need IRQ 2 unmasked on the first PIC, the second one goes through it */
-void pcm_install() {
-    _disable();
+int irq_mismatch;
 
-    old_vector = _dos_getvect(vector_of(irq));
-    _dos_setvect(vector_of(irq), pcm_isr);
-    old_pic1 = (uint8_t)inp(PIC1_DATA);
-    if (irq >= 8) {
-        old_pic2 = (uint8_t)inp(PIC2_DATA);
-        outp(PIC2_DATA, old_pic2 & ~(1 << (irq - 8)));
-        outp(PIC1_DATA, old_pic1 & ~(1 << 2));      /* cascade */
-    } else
-        outp(PIC1_DATA, old_pic1 & ~(1 << irq));
-
-    _enable();
-
-    installed = 1;
-    atexit(pcm_uninstall);
+int pcm_irq_mismatch() {
+    return irq_mismatch;
 }
 
 int pcm_init(blaster_cfg_t *cfg, double frame_hz) {
+    uint8_t found_irq;
+
     dsp_version_t ver;
 
-    ready = 0;
+    pcm_ready = 0;
     if (cfg->port == -1 || cfg->irq == -1 || cfg->dma == -1) {
-        printf("PCM: BLASTER needs A, I and D\n");
+        printf(" PCM: BLASTER needs A, I and D\n");
         return 0;
     }
     if (cfg->dma > 3 || cfg->irq < 2 || cfg->irq > 15) {
-        printf("PCM: unsupported I%d or D%d\n", cfg->irq, cfg->dma);
+        printf(" PCM: unsupported I%d or D%d\n", cfg->irq, cfg->dma);
         return 0;
     }
-    base = (uint16_t)cfg->port;
+    sb_base = (uint16_t)cfg->port;
     /* On an AT, IRQ 2 is the cascade: cards on the IRQ 2 pin arrive as 9 */
-    irq  = (uint8_t)(cfg->irq == 2 ? 9 : cfg->irq);
-    dma  = (uint8_t)cfg->dma;
+    sb_irq  = (uint8_t)(cfg->irq == 2 ? 9 : cfg->irq);
+    sb_dma  = (uint8_t)cfg->dma;
     frame_rate = frame_hz;
 
-    if (!dsp_reset(base) || !dsp_get_version(base, &ver)) {
-        printf("PCM: DSP not answering\n");
+    if (!dsp_reset(sb_base) || !dsp_get_version(sb_base, &ver)) {
+        printf(" PCM: DSP not answering\n");
         return 0;
     }
 
     dsp_major = ver.major;
 
     if (!buf_alloc(dsp_major >= 3)) {
-        printf("PCM: no memory for buffers\n");
+        printf(" PCM: no memory for buffers\n");
         return 0;
     }
 
-    /* Slow on a 486 SX since sin() is emulated, alert the user we are working */
-    printf("PCM: building tables...\n");
-    build_tables();
-    pcm_install();
-    ready = 1;
+    found_irq = dsp_probe_irq();
+    if (found_irq && found_irq != sb_irq) {
+        printf(" PCM: the DSP raised IRQ %u, BLASTER says I%d. Set BLASTER I%u\n"
+               "      (or fix the card's setup) and run again\n", found_irq, cfg->irq, found_irq);
+        irq_mismatch = 1;
+        return 0;
+    }
+    if (!found_irq)
+        printf(" PCM: no IRQ seen in a test transfer, check BLASTER I%d and the card's setup\n",
+               cfg->irq);
 
-    printf("PCM: 8-bit mono, %.1f Hz, IRQ %u, DMA %u\n", PCM_RATE, irq, dma);
-    st_init(cfg);
+    /* Slow on a 486 SX since sin() is emulated, alert the user we are working */
+    printf(" PCM: building tables...\n");
+    build_tables();
+    irq_hook_install(&sb_hook, sb_irq, pcm_isr);
+    atexit(pcm_unhook);
+    pcm_ready = 1;
+
+    if (verbose)
+        printf(" PCM: 8-bit mono, %.1f Hz, IRQ %u, DMA %u\n", PCM_RATE, sb_irq, sb_dma);
+    pcmx_init(cfg);
     return 1;
 }
 
 /* On DSP 1.xx/2.xx the speaker on takes ~112 ms and the DSP drops commands meanwhile */
 void pcm_prepare() {
-    if (!ready)
+    if (!pcm_ready)
         return;
 
-    dsp_write(base, DSP_SPEAKER_ON);
+    dsp_write(sb_base, DSP_SPEAKER_ON);
 }
 
 /* ---- Clock tone ---- */
@@ -360,7 +448,7 @@ void pcm_prepare() {
 void pcm_clock_arm(unsigned frames) {
     unsigned long total;
 
-    if (!ready)
+    if (!pcm_ready)
         return;
 
     /* Whole periods, so it ends on 0x80. Under 64 KB, one DSP count */
@@ -368,36 +456,36 @@ void pcm_clock_arm(unsigned frames) {
     total -= total % CLK_PERIOD;
     if (total > 0xFFF8UL)
         total = 0xFFF8UL;
-    clk_len = (uint16_t)total;
+    clock_len = (uint16_t)total;
     count_clock.expected = 1;
 
     /* Rate set here, frames after the speaker on. The DMA loops the
      * buffer, the DSP count says when to stop */
-    dsp_write(base, DSP_TIME_CONST);
-    dsp_write(base, PCM_TC);
-    dma_program(clk_buf, CLK_MAX, DMA_MODE_AUTO);
+    dsp_write(sb_base, DSP_TIME_CONST);
+    dsp_write(sb_base, PCM_TC);
+    dma_program(sb_dma, clock_buf, CLK_MAX, DMA_MODE_AUTO);
 }
 
 /* On the frame edge, one single-cycle transfer for the whole tone */
 void pcm_clock_start() {
-    if (!ready)
+    if (!pcm_ready)
         return;
 
     irq_count = 0;
-    if (dsp_play(DSP_PLAY_8BIT, clk_len))
-        playing = 1;
+    if (dsp_play(DSP_PLAY_8BIT, clock_len))
+        dsp_busy = 1;
 }
 
 /* One IRQ should have come */
 void pcm_clock_stop() {
-    if (!ready)
+    if (!pcm_ready)
         return;
 
     count_clock.got = irq_count;
 
     if (irq_count >= 1) {
-        dma_mask();
-        playing = 0;
+        dma_mask(sb_dma);
+        dsp_busy = 0;
     } else
         recover();
 }
@@ -419,8 +507,8 @@ double step_freq(pcm_steps_t kind, unsigned step) {
 struct {
     int            active;
     unsigned       buf;
-    uint8_t __far *dest;
-    const int8_t  *table;
+    uint8_t __far  *dest;
+    int8_t         *table;
     unsigned       len, pos;
     uint32_t       phase, phase_inc;
 } fill;
@@ -454,7 +542,7 @@ void fill_samples(unsigned max_samples) {
 void pcm_step_fill(pcm_steps_t kind, unsigned step, unsigned buf, unsigned frames) {
     unsigned len;
 
-    if (!ready)
+    if (!pcm_ready)
         return;
 
     len = (unsigned)(PCM_RATE * frames * FILL_PCT / 100.0 / frame_rate);
@@ -474,8 +562,8 @@ void pcm_step_fill(pcm_steps_t kind, unsigned step, unsigned buf, unsigned frame
 
 void pcm_fill_more() {
     fill_samples(FILL_CHUNK);
-    st_fill_samples(FILL_CHUNK);
-    ess_poll();
+    pcmx_fill_samples(FILL_CHUNK);
+    pcmx_poll();
 }
 
 /* Counts the previous step's IRQ, then starts this
@@ -483,7 +571,7 @@ void pcm_fill_more() {
 void pcm_step_start(pcm_steps_t kind, unsigned buf) {
     pcm_count_t *count = &count_steps[kind];
 
-    if (!ready)
+    if (!pcm_ready)
         return;
 
     if (step_pending) {
@@ -499,22 +587,22 @@ void pcm_step_start(pcm_steps_t kind, unsigned buf) {
         fill_samples(STEP_MAX);
 
     step_irq_base = irq_count;
-    dma_program(step_buf[buf], step_len[buf], DMA_MODE_SINGLE);
-    count->expected++; 
+    dma_program(sb_dma, step_buf[buf], step_len[buf], DMA_MODE_SINGLE);
+    count->expected++;
     step_pending = dsp_play(DSP_PLAY_8BIT, step_len[buf]);
-    playing = step_pending;
+    dsp_busy = step_pending;
 }
 
 void pcm_steps_end(pcm_steps_t kind) {
     pcm_count_t *count = &count_steps[kind];
 
-    if (!ready || !step_pending)
+    if (!pcm_ready || !step_pending)
         return;
 
     if (irq_count != step_irq_base) {
         count->got++;
-        dma_mask();
-        playing = 0;
+        dma_mask(sb_dma);
+        dsp_busy = 0;
     } else
         recover();
 
@@ -523,17 +611,17 @@ void pcm_steps_end(pcm_steps_t kind) {
 
 /* A DSP reset clicks only if something may still be playing */
 void pcm_finish() {
-    if (!ready)
+    if (!pcm_ready)
         return;
 
-    st_finish();
-    dma_mask();
+    pcmx_finish();
+    dma_mask(sb_dma);
 
-    if (playing)
-        dsp_reset(base);
+    if (dsp_busy)
+        dsp_reset(sb_base);
 
-    dsp_write(base, DSP_SPEAKER_OFF);
-    playing = 0;
+    dsp_write(sb_base, DSP_SPEAKER_OFF);
+    dsp_busy = 0;
 }
 
 int print_count(pcm_count_t *count) {
@@ -547,18 +635,24 @@ int print_count(pcm_count_t *count) {
 void pcm_print_report() {
     int ok;
 
-    if (!ready)
+    if (!pcm_ready)
         return;
+
+    /* Every transfer ended with its IRQ: one line, the counts with /V */
+    if (!verbose && pcm_counts_ok()) {
+        printf("  PCM: %u transfers, all completed\n", pcm_transfers());
+        return;
+    }
 
     printf("  PCM IRQs:");
     ok  = print_count(&count_clock);
     ok &= print_count(&count_steps[PCM_SWEEP]);
     ok &= print_count(&count_steps[PCM_LEVEL]);
     printf("\n");
-    ok &= st_print_report();
+    ok &= pcmx_print_report();
 
     if (!ok)
-        printf("  WARNING: PCM IRQ %u missing, check BLASTER I and the card's jumpers\n", irq);
+        printf("  WARNING: PCM IRQ %u missing, check BLASTER I and the card's jumpers\n", sb_irq);
 }
 
 /* ======================================================================
@@ -576,9 +670,10 @@ void pcm_print_report() {
  * in order, then high-speed transfers at 1 MHz/23 bytes/s (21739 Hz per
  * channel). Mixer 0x0E restored by pcm_finish().
  * 8-bit stereo, DSP 4.xx: 0xC0 with the stereo mode bit, 22050 Hz.
- * 16-bit stereo, DSP 4.xx: 0xB0 signed stereo, 44100 Hz, high DMA.
- * 16-bit stereo, ESS ES18xx: Extended mode Audio 1, signed stereo at
- * 44111 Hz measured, on the 8-bit DMA channel.
+ * 16-bit stereo: a pcm16_driver_t (PCMDRV.H)
+ *   DSP 4.xx: 0xB0 signed stereo, 44100 Hz, high DMA, below.
+ *   ESS ES18xx: Extended mode, 44111 Hz measured, 8-bit DMA (ESS.C).
+ *   WSS codec: OPL3-SAx, 44100 Hz, its own DMA and IRQ (WSS.C).
  *
  * The rate goes with every transfer. DSPs take it right away, and
  * after a recover() it is back without anything to track.
@@ -604,73 +699,71 @@ void pcm_print_report() {
 /* SB Pro stereo takes bytes at twice the per-channel rate, left and
  * right in turn. 43478 bytes/s is over the ~23 kHz of normal mode.
  * Needs the high-speed command */
-#define ST_RATE16       44100u
-#define ST_RATE8        22050u  /* per channel, DSP 4.xx */
-#define ST_TC8          233     /* DSP 3.xx: 43478 bytes/s, 21739 per channel */
+#define PCMX_RATE16     44100u
+#define PCMX_RATE8      22050u  /* per channel, DSP 4.xx */
+#define SBPRO_STEREO_TC 233     /* DSP 3.xx: 43478 bytes/s, 21739 per channel */
 
 /* Loop buffer, frames: 121 ms at 44.1 kHz, 85% of a 10-frame block, so
  * a Sine step is one loop and a 20-frame Level or Separation step two. At
  * 22.05 kHz the same buffer lasts 243 ms, one loop for a 20-frame step */
-#define ST_STEP_L       5355u
-#define ST_CLK_L        4096u   /* whole rate / 8 periods */
+#define PCMX_STEP_FRAMES  5355u
+#define PCMX_CLOCK_FRAMES 4096u /* whole rate / 8 periods */
 
 /* Level and Separation tones at full scale: if a card's stereo or 16-bit
  * path is louder than its 8-bit mono one, that is the hardware and
  * MDFourier documents it. Sweep and clocks 3 dB down, as in 8-bit mono,
  * so the reference stays on a 1 kHz step and not on whichever sweep
  * frequency a card boosts */
-#define ST_AMP_TONE     32767   /* 0 dB: Separation and the first Level step */
-#define ST_AMP_SWEEP    23198   /* -3 dB: sweep and clocks */
-#define ST_LEVEL_SHIFT  2       /* 12 dB per Level step */
-#define ST_TONE_CYCLES8  243    /* 1000.6 Hz at 22050, in ST_STEP_L frames */
-#define ST_TONE_CYCLES16 121    /*  996.4 Hz at 44100 */
-#define ST_SWEEP_LOW    25.0
-#define ST_SWEEP_HIGH   20000.0
+#define PCMX_AMP_TONE     32767 /* 0 dB: Separation and the first Level step */
+#define PCMX_AMP_SWEEP    23198 /* -3 dB: sweep and clocks */
+#define PCMX_LEVEL_SHIFT  2     /* 12 dB per Level step */
+#define PCMX_TONE_CYCLES8  243  /* 1000.6 Hz at 22050, in PCMX_STEP_FRAMES */
+#define PCMX_TONE_CYCLES16 121  /*  996.4 Hz at 44100 */
+#define PCMX_SWEEP_LOW    25.0
+#define PCMX_SWEEP_HIGH   20000.0
 
 /* Second 8237, channels 5-7. It moves 16-bit words: addresses are in
  * words (physical / 2) within 128 KB pages, page register bit 0 unused */
 #define DMA16_MASK      0xD4
 #define DMA16_MODE      0xD6
 #define DMA16_FLIPFLOP  0xD8
-const uint8_t dma16_page_port[4] = { 0x8F, 0x8B, 0x89, 0x8A };
+uint8_t dma16_page_port[4] = { 0x8F, 0x8B, 0x89, 0x8A };
 
 /* Built once, steps only shift or look them up. No multiply per
  * sample: a 32-bit one is a library call on a 16-bit CPU */
-#define ST_SINE_BITS    10
-#define ST_SINE_SIZE    (1 << ST_SINE_BITS)
-int16_t st_sine16[ST_SINE_SIZE];     /* ST_AMP_TONE */
-int16_t st_sine16_3db[ST_SINE_SIZE]; /* ST_AMP_SWEEP */
-uint8_t st_sine8[ST_SINE_SIZE];      /* ST_AMP_TONE, unsigned 8-bit */
+#define PCMX_SINE_BITS  10
+#define PCMX_SINE_SIZE  (1 << PCMX_SINE_BITS)
+int16_t sine16_full[PCMX_SINE_SIZE];    /* PCMX_AMP_TONE */
+int16_t sine16_sweep[PCMX_SINE_SIZE];   /* PCMX_AMP_SWEEP */
+uint8_t sine8_full[PCMX_SINE_SIZE];     /* PCMX_AMP_TONE, unsigned 8-bit */
 
 /* Sweep cycles per loop buffer, log spaced, one more than the step
  * before at least */
-unsigned st_sweep_cycles[PCMX_SWEEP_STEPS];
+unsigned sweep16_cycles[PCMX_SWEEP_STEPS];
 
-int      st_stereo_ok, st16_ok;
-int      st_ess;                 /* 16-bit through ESS Extended mode */
-int      ess_active;             /* in Extended mode now */
-int      ess_failed;             /* Extended mode not accepted */
-uint8_t  hdma;
-int      st_sbpro;               /* DSP 3.xx path */
-int      st_sbp_saved = -1;      /* mixer 0x0E before stereo */
-uint8_t  __far prime_byte = 0x80;
+int      stereo_ok;              /* 8-bit stereo plays */
+char     *pcm16_failure;         /* the driver's begin() refused, why */
+int      sbpro_path;             /* DSP 3.xx */
+int      sbpro_out_saved = -1;   /* mixer 0x0E before stereo */
+uint8_t  high_dma;
+uint8_t  __far sbpro_prime_byte = 0x80;
 
-uint8_t __far *st_clk8;          /* ST_CLK_L stereo 8-bit frames */
-int16_t __far *st_clk16;         /* ST_CLK_L stereo 16-bit frames */
-uint8_t __far *st_step[2];       /* ST_STEP_L stereo 16-bit frames each */
-unsigned st_next;                /* buffer the next step goes into */
+uint8_t __far *clock8_buf;       /* PCMX_CLOCK_FRAMES stereo 8-bit frames */
+int16_t __far *clock16_buf;      /* PCMX_CLOCK_FRAMES stereo 16-bit frames */
+uint8_t __far *pcmx_step_buf[2]; /* PCMX_STEP_FRAMES stereo 16-bit frames each */
+unsigned pcmx_fill_buf;          /* buffer the next step goes into */
 
 typedef struct {
     pcmx_section_t section;
     int            bits16;
     int            clock;               /* plays its own clock buffer */
     unsigned       loops;               /* buffers played per start */
-} st_kind_info_t;
+} pcmx_kind_info_t;
 
 /* Clocks: 4 loops of 4096 frames at 22050 Hz, 8 at 44100, both ~0.74 s
  * of the 0.86 s block. 8 loops of 16-bit stereo are 65536 words, the
  * most one DSP count can hold */
-const st_kind_info_t st_info[PCMX_KIND_COUNT] = {
+pcmx_kind_info_t pcmx_kind_info[PCMX_KIND_COUNT] = {
     { PCMX_STEREO, 0, 1, 4 },           /* PCMX_CLK8,   ~0.74 s */
     { PCMX_STEREO, 0, 0, 1 },           /* PCMX_SEP8 */
     { PCMX_16,     1, 1, 8 },           /* PCMX_CLK16,  ~0.74 s */
@@ -679,32 +772,28 @@ const st_kind_info_t st_info[PCMX_KIND_COUNT] = {
     { PCMX_16,     1, 0, 2 },           /* PCMX_SEP16 */
 };
 
-pcm_count_t st_count[PCMX_KIND_COUNT] = {
+pcm_count_t pcmx_counts[PCMX_KIND_COUNT] = {
     { "clock", 0, 0 }, { "separation", 0, 0 },
     { "clock", 0, 0 }, { "sweep", 0, 0 }, { "level", 0, 0 }, { "separation", 0, 0 }
 };
 
-unsigned            st_irq_base;
-unsigned            st_irq_need = 1;        /* IRQs the start raises */
-int                 st_pending = -1;        /* kind playing, its IRQ not counted */
-
-int  ess_setup();
-int  ess_play(void __far *buf, unsigned frames, unsigned loops);
-void ess_end();
+unsigned pcmx_irq_base;              /* irq_count when the tone started */
+unsigned pcmx_irqs_expected = 1;     /* IRQs the tone raises */
+int      pcmx_playing_kind  = -1;    /* kind playing, its IRQs not counted yet */
 
 /* The step being built, a chunk per frame. Same phase accumulator as
- * fill, over the loop buffer: phase_inc = cycles / ST_STEP_L * 2^32,
- * so the buffer holds exactly that many cycles */
+ * fill, over the loop buffer: phase_inc = cycles / PCMX_STEP_FRAMES *
+ * 2^32, so the buffer holds exactly that many cycles */
 struct {
     int             active;
     int             bits16;
     uint8_t __far   *dest;
-    const int16_t   *table;
+    int16_t         *table;
     unsigned        pos;
     unsigned        channels;           /* bit 0 left, bit 1 right */
     unsigned        level_shift;        /* 6 dB per bit */
     uint32_t        phase, phase_inc;
-} sf;
+} pcmx_fill;
 
 /* ---- Memory: one DOS block, buffers placed so none crosses 64 KB ----
  * The 8237 can't cross a 64 KB physical page: its page register
@@ -733,7 +822,7 @@ void __far *buf_place(uint32_t bytes) {
  * cross a page starts at the next one: each one under 21.5 KB, the
  * skips waste less than 64 KB in total */
 #define MONO_NEED       (CLK_MAX + 2UL * STEP_MAX)
-#define STEREO_NEED     (2UL * ST_STEP_L * 4 + ST_CLK_L * 4 + ST_CLK_L * 2)
+#define STEREO_NEED     (2UL * PCMX_STEP_FRAMES * 4 + PCMX_CLOCK_FRAMES * 4 + PCMX_CLOCK_FRAMES * 2)
 
 int buf_alloc(int stereo) {
     unsigned seg;
@@ -746,105 +835,67 @@ int buf_alloc(int stereo) {
     buf_cursor = (uint32_t)seg << 4;
     buf_end    = buf_cursor + total;
 
-    clk_buf     = (uint8_t __far *)buf_place(CLK_MAX);
+    clock_buf   = (uint8_t __far *)buf_place(CLK_MAX);
     step_buf[0] = (uint8_t __far *)buf_place(STEP_MAX);
     step_buf[1] = (uint8_t __far *)buf_place(STEP_MAX);
-    if (!clk_buf || !step_buf[0] || !step_buf[1])
+    if (!clock_buf || !step_buf[0] || !step_buf[1])
         return 0;
 
     if (stereo) {
-        st_step[0] = (uint8_t __far *)buf_place(ST_STEP_L * 4UL);
-        st_step[1] = (uint8_t __far *)buf_place(ST_STEP_L * 4UL);
-        st_clk16   = (int16_t __far *)buf_place(ST_CLK_L * 4UL);
-        st_clk8    = (uint8_t __far *)buf_place(ST_CLK_L * 2UL);
+        pcmx_step_buf[0] = (uint8_t __far *)buf_place(PCMX_STEP_FRAMES * 4UL);
+        pcmx_step_buf[1] = (uint8_t __far *)buf_place(PCMX_STEP_FRAMES * 4UL);
+        clock16_buf      = (int16_t __far *)buf_place(PCMX_CLOCK_FRAMES * 4UL);
+        clock8_buf       = (uint8_t __far *)buf_place(PCMX_CLOCK_FRAMES * 2UL);
     }
     return 1;
 }
 
-void st_build_tables() {
+void pcmx_build_tables() {
     unsigned pos, prev_cycles = 0;
 
-    for (pos = 0; pos < ST_SINE_SIZE; pos++) {
-        double sine_val = sin(2.0 * 3.14159265358979 * pos / ST_SINE_SIZE);
+    for (pos = 0; pos < PCMX_SINE_SIZE; pos++) {
+        double sine_val = sin(2.0 * 3.14159265358979 * pos / PCMX_SINE_SIZE);
         int    top8;
 
-        st_sine16[pos]     = (int16_t)floor(ST_AMP_TONE * sine_val + 0.5);
-        st_sine16_3db[pos] = (int16_t)floor(ST_AMP_SWEEP * sine_val + 0.5);
+        sine16_full[pos]  = (int16_t)floor(PCMX_AMP_TONE * sine_val + 0.5);
+        sine16_sweep[pos] = (int16_t)floor(PCMX_AMP_SWEEP * sine_val + 0.5);
         /* The 16-bit sample rounded to its top 8 bits. Full scale
          * rounds to 128, one past the top: kept at 127 */
-        top8 = (st_sine16[pos] + 128) >> 8;
-        st_sine8[pos] = (uint8_t)(128 + (top8 > 127 ? 127 : top8));
+        top8 = (sine16_full[pos] + 128) >> 8;
+        sine8_full[pos] = (uint8_t)(128 + (top8 > 127 ? 127 : top8));
     }
 
     /* rate / 8, both channels, ending on a zero crossing */
-    for (pos = 0; pos < ST_CLK_L; pos++) {
+    for (pos = 0; pos < PCMX_CLOCK_FRAMES; pos++) {
         double  sine_val = sin(2.0 * 3.14159265358979 * ((pos % 8) + 1) / 8.0);
-        int16_t clk16    = (int16_t)floor(ST_AMP_SWEEP * sine_val + 0.5);
-        uint8_t clk8     = (uint8_t)(128 + floor(ST_AMP_SWEEP / 256.0 * sine_val + 0.5));
+        int16_t clk16    = (int16_t)floor(PCMX_AMP_SWEEP * sine_val + 0.5);
+        uint8_t clk8     = (uint8_t)(128 + floor(PCMX_AMP_SWEEP / 256.0 * sine_val + 0.5));
 
-        st_clk16[2 * pos] = st_clk16[2 * pos + 1] = clk16;
-        st_clk8[2 * pos]  = st_clk8[2 * pos + 1]  = clk8;
+        clock16_buf[2 * pos] = clock16_buf[2 * pos + 1] = clk16;
+        clock8_buf[2 * pos]  = clock8_buf[2 * pos + 1]  = clk8;
     }
 
     /* At the low end the log steps are under one cycle apart, rounding
      * would repeat a frequency: each step gets one more at least */
     for (pos = 0; pos < PCMX_SWEEP_STEPS; pos++) {
-        unsigned cycles = (unsigned)floor(ST_SWEEP_LOW * pow(ST_SWEEP_HIGH / ST_SWEEP_LOW,
-                              (double)pos / (PCMX_SWEEP_STEPS - 1)) * ST_STEP_L / ST_RATE16 + 0.5);
+        unsigned cycles = (unsigned)floor(PCMX_SWEEP_LOW * pow(PCMX_SWEEP_HIGH / PCMX_SWEEP_LOW,
+                              (double)pos / (PCMX_SWEEP_STEPS - 1)) * PCMX_STEP_FRAMES / PCMX_RATE16 + 0.5);
 
         if (cycles <= prev_cycles)
             cycles = prev_cycles + 1;
-        st_sweep_cycles[pos] = prev_cycles = cycles;
+        sweep16_cycles[pos] = prev_cycles = cycles;
     }
 }
 
-void st_init(blaster_cfg_t *cfg) {
-    st_stereo_ok = st16_ok = 0;
-    st_sbpro = dsp_major == 3;
-    hdma = (uint8_t)cfg->high_dma;
+/* ---- SB16 16-bit driver ---- */
 
-    if (dsp_major < 3) {
-        printf("PCM stereo/16-bit: not played (DSP %u.xx is mono only)\n", dsp_major);
-        return;
-    }
-
-    if (!st_step[0] || !st_step[1] || !st_clk16 || !st_clk8) {
-        printf("PCM stereo/16-bit: not played (no memory for buffers)\n");
-        return;
-    }
-
-    st_build_tables();
-    st_stereo_ok = 1;
-
-    if (dsp_major >= 4 && cfg->high_dma >= 5 && cfg->high_dma <= 7)
-        st16_ok = 1;
-
-    /* DSP 3.01 with the ES18xx mixer ID: Extended mode, no high DMA */
-    if (st_sbpro && is_ess(base))
-        st16_ok = st_ess = 1;
-
-    printf("PCM stereo: 8-bit, %s\n", st_sbpro ? "SB Pro method, 21739 Hz" : "22050 Hz");
-    if (st_ess)
-        printf("PCM 16-bit: stereo, 44111 Hz, ESS Extended mode, DMA %u\n", dma);
-    else if (st16_ok)
-        printf("PCM 16-bit: stereo, 44100 Hz, DMA %u\n", hdma);
-    else
-        printf("PCM 16-bit: not played (%s)\n",
-               dsp_major < 4 ? "needs DSP 4.xx" : "BLASTER has no H5-H7");
-}
-
-/* Cards that can't play a kind skip it: MDF.C plays a filler */
-int st_enabled(pcmx_kind_t kind) {
-    return ready && (st_info[kind].section == PCMX_STEREO ? st_stereo_ok : st16_ok);
-}
-
-/* ---- DMA ---- */
+int pcmx_set_rate(unsigned rate);
 
 /* As dma_program(), on the 16-bit controller: address and count in words */
 void dma16_program(void __far *buf, uint16_t words, uint8_t mode) {
-    uint32_t phys         = phys_of(buf);
-    uint8_t  channel      = (uint8_t)(hdma & 3);
-    uint16_t word_offset  = (uint16_t)((phys >> 1) & 0xFFFF);
+    uint32_t phys          = phys_of(buf);
+    uint8_t  channel       = (uint8_t)(high_dma & 3);
+    uint16_t word_offset   = (uint16_t)((phys >> 1) & 0xFFFF);
     uint16_t words_minus_1 = (uint16_t)(words - 1);
 
     outp(DMA16_MASK, 0x04 | channel);
@@ -858,410 +909,370 @@ void dma16_program(void __far *buf, uint16_t words, uint8_t mode) {
     outp(DMA16_MASK, channel);
 }
 
-void st_mask_all() {
-    dma_mask();
-
-    if (st16_ok && !st_ess)
-        outp(DMA16_MASK, 0x04 | (hdma & 3));
+/* A command and its length - 1, as the DSP 4.xx transfers take it */
+int dsp4_play(uint8_t cmd, uint8_t mode, uint16_t units_minus_1) {
+    return dsp_write(sb_base, cmd) && dsp_write(sb_base, mode) &&
+           dsp_write(sb_base, (uint8_t)(units_minus_1 & 0xFF)) &&
+           dsp_write(sb_base, (uint8_t)(units_minus_1 >> 8));
 }
 
-/* ---- Play ---- */
-
-/* DSP 4.xx takes the rate in Hz, DSP 3.xx a time constant */
-int st_set_rate(int bits16) {
-    unsigned rate = bits16 ? ST_RATE16 : ST_RATE8;
-
-    if (st_sbpro)
-        return dsp_write(base, DSP_TIME_CONST) && dsp_write(base, ST_TC8);
-
-    return dsp_write(base, DSP_RATE_OUT) &&
-           dsp_write(base, (uint8_t)(rate >> 8)) &&
-           dsp_write(base, (uint8_t)(rate & 0xFF));
+void sb16_print_info() {
+    printf(" PCM 16-bit: stereo, 44100 Hz, DMA %u\n", high_dma);
 }
 
-/* Loops a buffer of stereo frames, plays it "loops" times.
- * DMA wraps over the buffer (auto-init). DSP has the full
- * length, so it raises the IRQ at the end */
-int st_play(void __far *buf, unsigned frames, unsigned loops, int bits16) {
-    uint32_t total_units = 2UL * frames * loops;        /* bytes or words */
-    uint16_t units_minus_1 = (uint16_t)(total_units - 1);
+/* DMA wraps over the buffer (auto-init). DSP has the full length, so
+ * it raises the IRQ at the end */
+unsigned sb16_play(void __far *buf, unsigned frames, unsigned loops) {
+    uint16_t words_minus_1 = (uint16_t)(2UL * frames * loops - 1);
 
-    if (bits16 && st_ess)
-        return ess_play(buf, frames, loops);
-
-    if (!st_set_rate(bits16))
+    if (!pcmx_set_rate(PCMX_RATE16))
         return 0;
+    dma16_program(buf, (uint16_t)(2 * frames), DMA_MODE_AUTO);
+    return dsp4_play(DSP_SB16_16BIT, MODE_S16_STEREO, words_minus_1);
+}
 
-    if (bits16) {
-        dma16_program(buf, (uint16_t)(2 * frames), DMA_MODE_AUTO);
-        return dsp_write(base, DSP_SB16_16BIT) && dsp_write(base, MODE_S16_STEREO) &&
-               dsp_write(base, (uint8_t)(units_minus_1 & 0xFF)) && dsp_write(base, (uint8_t)(units_minus_1 >> 8));
+void sb16_stop() {
+    outp(DMA16_MASK, 0x04 | (high_dma & 3));
+}
+
+pcm16_driver_t sb16_driver = {
+    "",
+    sb16_print_info,
+    NULL,               /* begin */
+    sb16_play,
+    NULL,               /* poll */
+    sb16_stop,
+    NULL,               /* after_reset */
+    NULL,               /* end */
+    NULL                /* shared_isr */
+};
+
+/* ---- Setup ---- */
+
+void pcmx_init(blaster_cfg_t *cfg) {
+    stereo_ok  = 0;
+    pcm16      = NULL;
+    sbpro_path = dsp_major == 3;
+    high_dma   = (uint8_t)cfg->high_dma;
+
+    if (dsp_major < 3) {
+        printf(" PCM: 8-bit mono, stereo and 16-bit not played (DSP %u.xx is mono only)\n", dsp_major);
+        return;
     }
 
-    dma_program((uint8_t __far *)buf, (uint16_t)(2 * frames), DMA_MODE_AUTO);
-    /* High-speed takes its length from the block size command */
-    if (st_sbpro)
-        return dsp_play(DSP_BLOCK_SIZE, (uint16_t)(units_minus_1 + 1)) && dsp_write(base, DSP_HS_8BIT);
+    if (!pcmx_step_buf[0] || !pcmx_step_buf[1] || !clock16_buf || !clock8_buf) {
+        printf(" PCM: 8-bit mono, stereo and 16-bit not played (no memory for buffers)\n");
+        return;
+    }
 
-    return dsp_write(base, DSP_SB16_8BIT) && dsp_write(base, MODE_U8_STEREO) &&
-           dsp_write(base, (uint8_t)(units_minus_1 & 0xFF)) && dsp_write(base, (uint8_t)(units_minus_1 >> 8));
+    pcmx_build_tables();
+    stereo_ok = 1;
+
+    if (dsp_major >= 4 && cfg->high_dma >= 5 && cfg->high_dma <= 7)
+        pcm16 = &sb16_driver;
+    /* DSP 3.01 with the ESS ID: Extended mode, no high DMA */
+    else if (sbpro_path && is_ess(sb_base))
+        pcm16 = &ess_driver;
+    /* Other SB Pro compatibles: a WSS codec next to it (OPL3-SAx), SAX.C */
+    else if (sbpro_path && wss_in_use())
+        pcm16 = &wss_driver;
+
+    if (verbose) {
+        printf(" PCM stereo: 8-bit, %s\n", sbpro_path ? "SB Pro method, 21739 Hz" : "22050 Hz");
+        if (pcm16)
+            pcm16->print_info();
+    }
+
+    /* One line of what plays, the reason when 16-bit doesn't */
+    if (pcm16) {
+        if (!verbose)
+            printf(" PCM: 8-bit mono, 8-bit stereo, 16-bit stereo%s\n", pcm16->suffix);
+    } else
+        printf(" PCM: 8-bit mono, 8-bit stereo, 16-bit not played (%s)\n",
+               dsp_major >= 4 ? "BLASTER has no H5-H7" :
+               sax_no_16bit_reason() ? sax_no_16bit_reason() : "needs DSP 4.xx");
 }
 
-/* Missing IRQ. Stop and reset, the rate goes again with the next play */
-void st_recover() {
-    st_mask_all();
-    recover();
-    /* The reset left Extended mode, back for the steps still to play */
-    if (st_ess && ess_active)
-        ess_setup();
+/* Cards that can't play a kind skip it: MDF.C plays a filler */
+int pcmx_enabled(pcmx_kind_t kind) {
+    return pcm_ready && (pcmx_kind_info[kind].section == PCMX_STEREO ? stereo_ok : pcm16 != NULL);
 }
 
 /* DSP 3.xx: stereo on, output filter off and one silent byte so the
  * channels start in order. */
 void pcmx_begin() {
-    if (!st_enabled(PCMX_SEP8) || !st_sbpro)
+    if (!pcmx_enabled(PCMX_SEP8) || !sbpro_path)
         return;
 
-    st_sbp_saved = mix_read(base, SBP_OUT_CTRL);
-    mix_write(base, SBP_OUT_CTRL, (uint8_t)(st_sbp_saved | SBP_STEREO | SBP_FILTER_OFF));
-    dma_program(&prime_byte, 1, DMA_MODE_SINGLE);
+    sbpro_out_saved = mix_read(sb_base, SBP_OUT_CTRL);
+    mix_write(sb_base, SBP_OUT_CTRL, (uint8_t)(sbpro_out_saved | SBP_STEREO | SBP_FILTER_OFF));
+    dma_program(sb_dma, &sbpro_prime_byte, 1, DMA_MODE_SINGLE);
     dsp_play(DSP_PLAY_8BIT, 1);
+}
+
+void sbpro_out_restore() {
+    if (sbpro_out_saved >= 0) {
+        mix_write(sb_base, SBP_OUT_CTRL, (uint8_t)sbpro_out_saved);
+        sbpro_out_saved = -1;
+    }
+}
+
+/* Right after the 8-bit stereo section, before the 16-bit one's gap.
+ * SB Pro mixer 0x0E back as it was, then the driver's own setup. A
+ * card that doesn't take it plays the filler as one without 16-bit */
+void pcmx_begin16() {
+    if (!pcm_ready || !pcm16 || !pcm16->begin)
+        return;
+
+    sbpro_out_restore();
+    pcm16_failure = pcm16->begin();
+    if (pcm16_failure)
+        pcm16 = NULL;
+}
+
+/* ---- Play ---- */
+
+/* DSP 4.xx takes the rate in Hz, DSP 3.xx a time constant */
+int pcmx_set_rate(unsigned rate) {
+    if (sbpro_path)
+        return dsp_write(sb_base, DSP_TIME_CONST) && dsp_write(sb_base, SBPRO_STEREO_TC);
+
+    return dsp_write(sb_base, DSP_RATE_OUT) &&
+           dsp_write(sb_base, (uint8_t)(rate >> 8)) &&
+           dsp_write(sb_base, (uint8_t)(rate & 0xFF));
+}
+
+/* Loops a buffer of stereo frames, plays it "loops" times. The IRQs it
+ * raises, 0 if it didn't start */
+unsigned pcmx_play(void __far *buf, unsigned frames, unsigned loops, int bits16) {
+    uint16_t bytes_minus_1 = (uint16_t)(2UL * frames * loops - 1);
+
+    if (bits16)
+        return pcm16->play(buf, frames, loops);
+
+    if (!pcmx_set_rate(PCMX_RATE8))
+        return 0;
+
+    dma_program(sb_dma, buf, (uint16_t)(2 * frames), DMA_MODE_AUTO);
+    /* High-speed takes its length from the block size command */
+    if (sbpro_path)
+        return dsp_play(DSP_BLOCK_SIZE, (uint16_t)(bytes_minus_1 + 1)) && dsp_write(sb_base, DSP_HS_8BIT);
+
+    return dsp4_play(DSP_SB16_8BIT, MODE_U8_STEREO, bytes_minus_1);
+}
+
+/* Every DMA channel a stereo or 16-bit tone may be on */
+void pcmx_stop() {
+    dma_mask(sb_dma);
+    if (pcm16 && pcm16->stop)
+        pcm16->stop();
+}
+
+/* Missing IRQ. Stop and reset, the rate goes again with the next play */
+void pcmx_recover() {
+    pcmx_stop();
+    recover();
+    if (pcm16 && pcm16->after_reset)
+        pcm16->after_reset();
+}
+
+/* Once per frame: the driver sees its tone's IRQs */
+void pcmx_poll() {
+    if (pcm16 && pcm16->poll && pcmx_playing_kind >= 0)
+        pcm16->poll(irq_count - pcmx_irq_base);
 }
 
 /* ---- Steps ---- */
 
-unsigned st_cycles(pcmx_kind_t kind, unsigned step) {
+unsigned pcmx_cycles(pcmx_kind_t kind, unsigned step) {
     if (kind == PCMX_SEP8)
-        return ST_TONE_CYCLES8;
+        return PCMX_TONE_CYCLES8;
 
     if (kind == PCMX_SWEEP16)
-        return st_sweep_cycles[step];
+        return sweep16_cycles[step];
 
-    return ST_TONE_CYCLES16;
+    return PCMX_TONE_CYCLES16;
 }
 
 /* Queues a step into the buffer not playing */
 void pcmx_step_fill(pcmx_kind_t kind, unsigned step) {
-    if (!st_enabled(kind) || st_info[kind].clock)
+    if (!pcmx_enabled(kind) || pcmx_kind_info[kind].clock)
         return;
 
-    sf.bits16 = st_info[kind].bits16;
-    sf.dest = st_step[st_next];
-    sf.pos = 0;
-    sf.phase = 0;
-    sf.phase_inc = (uint32_t)(st_cycles(kind, step) * 4294967296.0 / ST_STEP_L);
-    sf.channels = 3;
+    pcmx_fill.bits16    = pcmx_kind_info[kind].bits16;
+    pcmx_fill.dest      = pcmx_step_buf[pcmx_fill_buf];
+    pcmx_fill.pos       = 0;
+    pcmx_fill.phase     = 0;
+    pcmx_fill.phase_inc = (uint32_t)(pcmx_cycles(kind, step) * 4294967296.0 / PCMX_STEP_FRAMES);
+    pcmx_fill.channels  = 3;
 
     if (kind == PCMX_SEP8 || kind == PCMX_SEP16)
-        sf.channels = step == 0 ? 1 : (step == 1 ? 2 : 3);  /* left, right, both */
+        pcmx_fill.channels = step == 0 ? 1 : (step == 1 ? 2 : 3);  /* left, right, both */
 
-    sf.level_shift = kind == PCMX_LEVEL16 ? step * ST_LEVEL_SHIFT : 0;
-    sf.table  = kind == PCMX_SWEEP16 ? st_sine16_3db : st_sine16;
-    sf.active = 1;
+    pcmx_fill.level_shift = kind == PCMX_LEVEL16 ? step * PCMX_LEVEL_SHIFT : 0;
+    pcmx_fill.table       = kind == PCMX_SWEEP16 ? sine16_sweep : sine16_full;
+    pcmx_fill.active      = 1;
 }
 
 /* Up to max_frames more of the step being built. A silent channel
  * gets its silence value through a mask instead of a test per sample.
  * All ones keeps the sample, zero clears it */
-void st_fill_samples(unsigned max_frames) {
+void pcmx_fill_samples(unsigned max_frames) {
     unsigned end, pos;
 
-    if (!sf.active)
+    if (!pcmx_fill.active)
         return;
 
-    end = sf.pos + max_frames;
-    if (end > ST_STEP_L)
-        end = ST_STEP_L;
+    end = pcmx_fill.pos + max_frames;
+    if (end > PCMX_STEP_FRAMES)
+        end = PCMX_STEP_FRAMES;
 
-    if (sf.bits16) {
+    if (pcmx_fill.bits16) {
         /* Signed: silence is 0, the mask alone gives it */
-        int16_t __far *dest = (int16_t __far *)sf.dest + 2 * sf.pos;
-        int16_t left_mask  = (sf.channels & 1) ? -1 : 0;
-        int16_t right_mask = (sf.channels & 2) ? -1 : 0;
+        int16_t __far *dest = (int16_t __far *)pcmx_fill.dest + 2 * pcmx_fill.pos;
+        int16_t left_mask  = (pcmx_fill.channels & 1) ? -1 : 0;
+        int16_t right_mask = (pcmx_fill.channels & 2) ? -1 : 0;
 
-        for (pos = sf.pos; pos < end; pos++) {
-            int16_t sample = (int16_t)(sf.table[(uint16_t)(sf.phase >> 16) >> (16 - ST_SINE_BITS)] >> sf.level_shift);
+        for (pos = pcmx_fill.pos; pos < end; pos++) {
+            int16_t sample = (int16_t)(pcmx_fill.table[(uint16_t)(pcmx_fill.phase >> 16) >> (16 - PCMX_SINE_BITS)]
+                                       >> pcmx_fill.level_shift);
 
-            /* Measured. The first of a pair plays right, ESS Extended
+            /* Measured: the first of a pair plays right, ESS Extended
              * mode too though its data sheet says left */
             dest[0] = sample & right_mask;
             dest[1] = sample & left_mask;
             dest += 2;
-            sf.phase += sf.phase_inc;
+            pcmx_fill.phase += pcmx_fill.phase_inc;
         }
     } else {
         /* 8-bit: Separation only, full scale.
          * Unsigned: silence is 0x80 */
-        uint8_t __far *dest = sf.dest + 2 * sf.pos;
-        uint8_t left_mask  = (sf.channels & 1) ? 0xFF : 0;
-        uint8_t right_mask = (sf.channels & 2) ? 0xFF : 0;
+        uint8_t __far *dest = pcmx_fill.dest + 2 * pcmx_fill.pos;
+        uint8_t left_mask  = (pcmx_fill.channels & 1) ? 0xFF : 0;
+        uint8_t right_mask = (pcmx_fill.channels & 2) ? 0xFF : 0;
 
-        for (pos = sf.pos; pos < end; pos++) {
-            uint8_t sample = st_sine8[(uint16_t)(sf.phase >> 16) >> (16 - ST_SINE_BITS)];
+        for (pos = pcmx_fill.pos; pos < end; pos++) {
+            uint8_t sample = sine8_full[(uint16_t)(pcmx_fill.phase >> 16) >> (16 - PCMX_SINE_BITS)];
 
             dest[0] = (uint8_t)((sample & right_mask) | (0x80 & ~right_mask));
             dest[1] = (uint8_t)((sample & left_mask) | (0x80 & ~left_mask));
             dest += 2;
-            sf.phase += sf.phase_inc;
+            pcmx_fill.phase += pcmx_fill.phase_inc;
         }
     }
 
-    sf.pos = end;
-    if (sf.pos >= ST_STEP_L) {
-        sf.active = 0;
-        st_next ^= 1;       /* the next step goes into the other buffer */
+    pcmx_fill.pos = end;
+    if (pcmx_fill.pos >= PCMX_STEP_FRAMES) {
+        pcmx_fill.active = 0;
+        pcmx_fill_buf ^= 1;     /* the next step goes into the other buffer */
     }
 }
 
 /* Counts the IRQ of whatever played before, then starts this one on the frame edge */
 void pcmx_step_start(pcmx_kind_t kind) {
-    const st_kind_info_t *info = &st_info[kind];
-    int started;
+    pcmx_kind_info_t *info = &pcmx_kind_info[kind];
+    unsigned irqs;
 
-    if (!st_enabled(kind))
+    if (!pcmx_enabled(kind))
         return;
 
-    if (st_pending >= 0) {
-        if (irq_count - st_irq_base >= st_irq_need)
-            st_count[st_pending].got++;
+    if (pcmx_playing_kind >= 0) {
+        if (irq_count - pcmx_irq_base >= pcmx_irqs_expected)
+            pcmx_counts[pcmx_playing_kind].got++;
         else
-            st_recover();
-        st_pending = -1;
+            pcmx_recover();
+        pcmx_playing_kind = -1;
     }
 
-    st_irq_base = irq_count;
-    st_irq_need = 1;
-    st_count[kind].expected++;
+    pcmx_irq_base = irq_count;
+    pcmx_counts[kind].expected++;
 
     if (info->clock)
-        started = info->bits16 ? st_play(st_clk16, ST_CLK_L, info->loops, 1)
-                               : st_play(st_clk8, ST_CLK_L, info->loops, 0);
+        irqs = info->bits16 ? pcmx_play(clock16_buf, PCMX_CLOCK_FRAMES, info->loops, 1)
+                            : pcmx_play(clock8_buf, PCMX_CLOCK_FRAMES, info->loops, 0);
     else {
         /* Should be built by now */
-        if (sf.active)
-            st_fill_samples(ST_STEP_L);
-        /* Building flipped st_next when done: the built one is the other */
-        started = st_play(st_step[st_next ^ 1], ST_STEP_L, info->loops, info->bits16);
+        if (pcmx_fill.active)
+            pcmx_fill_samples(PCMX_STEP_FRAMES);
+        /* Building flipped pcmx_fill_buf when done: the built one is the other */
+        irqs = pcmx_play(pcmx_step_buf[pcmx_fill_buf ^ 1], PCMX_STEP_FRAMES, info->loops, info->bits16);
     }
 
-    if (started)
-        st_pending = kind;
-    else
-        st_recover();
+    if (irqs) {
+        pcmx_irqs_expected = irqs;
+        pcmx_playing_kind  = kind;
+    } else
+        pcmx_recover();
 }
 
 void pcmx_steps_end(pcmx_kind_t kind) {
-    if (!st_enabled(kind) || st_pending < 0)
+    if (!pcmx_enabled(kind) || pcmx_playing_kind < 0)
         return;
 
-    if (irq_count - st_irq_base >= st_irq_need) {
-        st_count[st_pending].got++;
-        st_mask_all();
+    if (irq_count - pcmx_irq_base >= pcmx_irqs_expected) {
+        pcmx_counts[pcmx_playing_kind].got++;
+        pcmx_stop();
     } else
-        st_recover();
+        pcmx_recover();
 
-    st_pending = -1;
+    pcmx_playing_kind = -1;
 }
 
-void st_finish() {
-    if (st_stereo_ok)
-        st_mask_all();
+void pcmx_finish() {
+    if (stereo_ok)
+        pcmx_stop();
 
-    ess_end();
+    if (pcm16 && pcm16->end)
+        pcm16->end();
 
-    if (st_sbp_saved >= 0) {
-        mix_write(base, SBP_OUT_CTRL, (uint8_t)st_sbp_saved);
-        st_sbp_saved = -1;
-    }
+    sbpro_out_restore();
 }
 
-int st_print_report() {
+int pcmx_print_report() {
     int ok = 1;
 
-    if (st_stereo_ok) {
+    if (stereo_ok) {
         printf("  PCM stereo IRQs:");
-        ok &= print_count(&st_count[PCMX_CLK8]);
-        ok &= print_count(&st_count[PCMX_SEP8]);
+        ok &= print_count(&pcmx_counts[PCMX_CLK8]);
+        ok &= print_count(&pcmx_counts[PCMX_SEP8]);
         printf("\n");
     }
 
-    if (st16_ok) {
+    if (pcm16) {
         printf("  PCM 16-bit IRQs:");
-        ok &= print_count(&st_count[PCMX_CLK16]);
-        ok &= print_count(&st_count[PCMX_SWEEP16]);
-        ok &= print_count(&st_count[PCMX_LEVEL16]);
-        ok &= print_count(&st_count[PCMX_SEP16]);
+        ok &= print_count(&pcmx_counts[PCMX_CLK16]);
+        ok &= print_count(&pcmx_counts[PCMX_SWEEP16]);
+        ok &= print_count(&pcmx_counts[PCMX_LEVEL16]);
+        ok &= print_count(&pcmx_counts[PCMX_SEP16]);
         printf("\n");
     }
-    if (ess_failed) {
-        printf("  WARNING: ESS Extended mode not accepted, 16-bit not played\n");
+    if (pcm16_failure) {
+        printf("  WARNING: %s", pcm16_failure);
         ok = 0;
     }
 
     return ok;
 }
 
-/* ======================================================================
- * ESS ES18xx Extended mode, 16-bit stereo
- *
- * DSP 3.01 in compatibility mode only plays 16-bit stereo to 11 kHz.
- * Extended mode plays it to 48 kHz on the same 8-bit DMA channel, the
- * FIFO gets bytes: low, high, first channel, then the second. The data
- * sheet says left first, measured on an ES1868/9 the first plays right
- *
- * Its registers are written as command, value (0xA1 then the divider)
- * and read with 0xC0, register. The mono and 8-bit stereo blocks stay
- * in compatibility mode: the data sheet advises against mixing the two,
- * Extended mode starts at the 16-bit section with a reset and ends with
- * one in pcm_finish().
- *
- * One start plays a whole tone as for the SB16: the 8237 loops the
- * buffer and the ES18xx counter reloads at each loop, one IRQ each.
- * Tones of more than one loop start in auto-initialize, and once the
- * IRQ of the next to last loop came, ess_poll() (once per frame) turns
- * auto-initialize off so the counter stops after the last one. A loop
- * is 93 ms or more, several frames to see it.
- *
- * From the ES1869 data sheet, "Extended Mode Audio 1 DAC Operation" and
- * the Audio 1 controller registers
- * ====================================================================== */
+/* All counts as expected, and the 16-bit driver took its setup */
+int pcm_counts_ok() {
+    unsigned kind;
 
-#define ESS_RESET_FIFO  3       /* to the reset port: reset and clear the FIFO */
-#define ESS_EXT_ON      0xC6    /* enables the Extended mode commands */
-#define ESS_READ_REG    0xC0
-#define ESS_RATE        0xA1    /* bit 7: 795.5 kHz / (256 - x) */
-#define ESS_FILTER      0xA2    /* 7.16 MHz / (256 - x), roll-off at 1/82 */
-#define ESS_COUNT_LO    0xA4    /* bytes per IRQ, two's complement */
-#define ESS_COUNT_HI    0xA5
-#define ESS_ANALOG      0xA8    /* bits 1-0: 01 stereo, 10 mono */
-#define ESS_IRQ_CTRL    0xB1
-#define ESS_DRQ_CTRL    0xB2
-#define ESS_DAC_HOLD    0xB6    /* 0x00 sets up the DAC for signed data */
-#define ESS_CTRL1       0xB7    /* FIFO format */
-#define ESS_CTRL2       0xB8    /* bit 2 auto-initialize, bit 0 run */
-/* Transfer type, bits 1-0. The register table has 01 single, 10 and
- * 11 demand (2 and 4 bytes) and 00 reserved, the programming steps 00
- * single and 01 demand. 01 works either way: the 8237 in single mode
- * takes a byte per request and serves a demand request byte by byte */
-#define ESS_XFER_TYPE   0xB9
-#define ESS_SINGLE      0x01
-
-/* 795.5 kHz / 18 = 44194 Hz by the data sheet, measured 44110.8 Hz:
- * the clock source runs at ~794.0 kHz */
-#define ESS_RATE_DIV    238
-/* Roll-off at ~80% of half the rate: 17677 Hz * 82 = 1.45 MHz,
- * 7.16 MHz / 5 = 1.432 MHz, 17.5 kHz */
-#define ESS_FILTER_DIV  251
-#define ESS_IRQ_ON      0x50    /* bit 6 counter IRQ, bit 4 set, data sheet step 6 */
-#define ESS_DRQ_ON      0x50    /* bit 6 Extended mode DRQ, bit 4 set */
-/* Data sheet Table 16, stereo 16-bit signed: 0x71, then 0xBC
- * (FIFO on, signed, stereo, 16-bit) */
-#define ESS_FMT_INIT    0x71
-#define ESS_FMT_S16ST   0xBC
-#define ESS_RUN         0x01
-#define ESS_AUTO        0x04
-
-unsigned ess_loops;             /* loops of the tone playing */
-int      ess_auto;              /* auto-initialize still on */
-
-int ess_write(uint8_t reg, uint8_t val) {
-    return dsp_write(base, reg) && dsp_write(base, val);
-}
-
-int ess_read(uint8_t reg) {
-    if (!dsp_write(base, ESS_READ_REG) || !dsp_write(base, reg))
-        return -1;
-    return dsp_read(base);
-}
-
-/* As dsp_reset() with the FIFO cleared too */
-int ess_reset() {
-    outp(base + 6, ESS_RESET_FIFO);
-    pit_delay_us(5);
-    outp(base + 6, 0);
-    return dsp_read(base) == 0xAA;
-}
-
-/* Reset into Extended mode, 16-bit signed stereo at 44111 Hz */
-int ess_setup() {
-    int analog;
-
-    ess_active = 0;
-    if (!ess_reset() || !dsp_write(base, ESS_EXT_ON))
+    if (count_clock.got != count_clock.expected ||
+        count_steps[PCM_SWEEP].got != count_steps[PCM_SWEEP].expected ||
+        count_steps[PCM_LEVEL].got != count_steps[PCM_LEVEL].expected || pcm16_failure)
         return 0;
-
-    analog = ess_read(ESS_ANALOG);
-    if (analog < 0)
-        return 0;
-
-    ess_write(ESS_CTRL2, 0);                    /* DAC direction, stopped */
-    ess_write(ESS_ANALOG, (uint8_t)((analog & ~3) | 1));
-    ess_write(ESS_XFER_TYPE, ESS_SINGLE);
-    ess_write(ESS_RATE, ESS_RATE_DIV);
-    ess_write(ESS_FILTER, ESS_FILTER_DIV);
-    ess_write(ESS_DAC_HOLD, 0x00);
-    ess_write(ESS_CTRL1, ESS_FMT_INIT);
-    ess_write(ESS_CTRL1, ESS_FMT_S16ST);
-    ess_write(ESS_IRQ_CTRL, ESS_IRQ_ON);
-    ess_write(ESS_DRQ_CTRL, ESS_DRQ_ON);
-    /* The reset took the DAC off the mixer. The gap before the clock
-     * gives it the ~100 ms the data sheet asks for */
-    dsp_write(base, DSP_SPEAKER_ON);
-
-    if (ess_read(ESS_RATE) != ESS_RATE_DIV)
-        return 0;
-    ess_active = 1;
+    for (kind = 0; kind < PCMX_KIND_COUNT; kind++)
+        if (pcmx_counts[kind].got != pcmx_counts[kind].expected)
+            return 0;
     return 1;
 }
 
-int ess_play(void __far *buf, unsigned frames, unsigned loops) {
-    uint16_t bytes  = (uint16_t)(4 * frames);   /* under 21.5 KB */
-    uint16_t reload = (uint16_t)(0 - bytes);
+unsigned pcm_transfers() {
+    unsigned kind, total;
 
-    if (!ess_active)
-        return 0;
-
-    ess_write(ESS_CTRL2, 0);
-    dma_program((uint8_t __far *)buf, bytes, DMA_MODE_AUTO);
-    ess_write(ESS_COUNT_LO, (uint8_t)(reload & 0xFF));
-    ess_write(ESS_COUNT_HI, (uint8_t)(reload >> 8));
-
-    ess_loops   = loops;
-    ess_auto    = loops > 1;
-    st_irq_need = loops;
-    return ess_write(ESS_CTRL2, (uint8_t)(ess_auto ? ESS_AUTO | ESS_RUN : ESS_RUN));
-}
-
-void ess_poll() {
-    if (ess_auto && st_pending >= 0 && irq_count - st_irq_base >= ess_loops - 1) {
-        ess_write(ESS_CTRL2, ESS_RUN);
-        ess_auto = 0;
-    }
-}
-
-/* Back to compatibility mode */
-void ess_end() {
-    if (!ess_active)
-        return;
-
-    ess_write(ESS_CTRL2, 0);
-    ess_auto   = 0;
-    ess_active = 0;
-    ess_reset();
-}
-
-/* ESS mixer 0x0E back as it was, then into Extended mode. */
-void pcmx_begin16() {
-    if (!st_ess || !ready)
-        return;
-
-    if (st_sbp_saved >= 0) {
-        mix_write(base, SBP_OUT_CTRL, (uint8_t)st_sbp_saved);
-        st_sbp_saved = -1;
-    }
-    if (!ess_setup()) {
-        ess_failed = 1;
-        st16_ok    = 0;
-        recover();
-    }
+    total = count_clock.expected + count_steps[PCM_SWEEP].expected + count_steps[PCM_LEVEL].expected;
+    for (kind = 0; kind < PCMX_KIND_COUNT; kind++)
+        total += pcmx_counts[kind].expected;
+    return total;
 }

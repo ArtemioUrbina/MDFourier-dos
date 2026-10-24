@@ -128,7 +128,7 @@ void vsync_end(vsync_stats_t *out) {
     *out = stats;
 }
 
-void vsync_print_stats(const vsync_stats_t *s, unsigned long expected) {
+void vsync_print_stats(vsync_stats_t *s, unsigned long expected) {
     printf("  frames: %lu expected, %lu played, %lu bad\n",
            expected, s->frames, s->bad);
     printf("  length: %0.4fs measured, %0.4fs expected\n",

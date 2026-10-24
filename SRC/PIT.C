@@ -10,16 +10,16 @@
 /* counter 0, lo/hi byte, mode 3, binary */
 #define PIT_CH0_MODE3   0x36
 
-static int      tb_started = 0;
-static uint16_t tb_last;
-static uint16_t tb_rem;
-static uint32_t tb_clocks;
+int      tb_started = 0;
+uint16_t tb_last;
+uint16_t tb_rem;
+uint32_t tb_clocks;
 
 #define PIT_CMD 0x43
 #define PIT_CH0 0x40
 
 /* Needs intrrupts disabled */
-static uint16_t pit_read() {
+uint16_t pit_read() {
     uint16_t lo, hi;
 
     /* latch command, counter 0 */

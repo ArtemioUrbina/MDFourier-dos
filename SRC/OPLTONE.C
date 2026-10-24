@@ -10,8 +10,8 @@
  * These are register offsets, not operator indices: the offset space
  * has gaps at 0x06-0x07 and 0x0E-0x0F.
  */
-static const uint8_t op_mod[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
-static const uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x14, 0x15 };
+uint8_t op_mod[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
+uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x14, 0x15 };
 
 #define OPL_TEST_WSE_REG 0x01
 #define OPL_TEST_WSE_BIT 0x20
@@ -21,10 +21,10 @@ static const uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x1
 /* Last Block/Fnum-high value written to 0xB0+ch, without the key-on
  * bit. Key-off rewrites this instead of 0x00, so the release tail
  * keeps playing at the note's pitch. */
-static uint8_t b0_shadow[9];
+uint8_t b0_shadow[9];
 
 /* OPL3 NEW mode output bits for 0xC0, per channel */
-static uint8_t c0_pan[9];
+uint8_t c0_pan[9];
 
 /* Carrier frequency multiplier, MULT register code (1 = x1) */
 void opl_set_carrier_mult(uint8_t channel, uint8_t mult)
@@ -132,7 +132,7 @@ void opl_freq_to_block_fnum(unsigned freq_hz, uint8_t *block, uint16_t *fnum)
                         / OPL_BASE_HZ);
 }
 
-static uint8_t make_b0(uint8_t block, uint16_t fnum)
+uint8_t make_b0(uint8_t block, uint16_t fnum)
 {
     return (uint8_t)(((block & 0x07) << 2) | ((fnum >> 8) & 0x03));
 }
