@@ -14,6 +14,7 @@
  * Reference tone: 6000 Hz requested, 6002.078595 Hz played.
  * FM depth and feedback tone: 440 Hz requested, 439.990595 Hz played.
  * Mixer watermark: 1000 Hz OK, 2000 Hz not verified, played 999.84 / 1999.68 Hz.
+ * Under Windows: 1500 Hz OK, 2500 Hz not verified, played 1500.52 / 2500.36 Hz.
  * Profile clock line:
  *   CLK y 2 6002.078595 8.283114
  */
@@ -41,6 +42,11 @@
 #define WM_OK_FNUM   659
 #define WM_BAD_BLOCK 6
 #define WM_BAD_FNUM  659
+/* The same under Windows */
+#define WM_WIN_OK_BLOCK  5
+#define WM_WIN_OK_FNUM   989
+#define WM_WIN_BAD_BLOCK 6
+#define WM_WIN_BAD_FNUM  824
 
 typedef struct {
     uint8_t  block;

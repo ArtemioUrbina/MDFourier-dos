@@ -15,13 +15,16 @@
 #define MAX_HZ   6200.0     /* last note, OPL tops out at 6209 Hz */
 
 /* Sine sweep with MULT for frequencies above the 6209 Hz limit */
-#define SINE_STEPS  128
-#define SINE_MIN_HZ 20.0
-#define SINE_MAX_HZ 20000.0
-#define REF_HZ    6000.0             /* sync pulses and chip ID tone */
-#define TONE_HZ   440.0              /* FM depth and feedback blocks */
-#define WM_OK_HZ  1000.0             /* watermark: mixer in capture state */
-#define WM_BAD_HZ 2000.0             /* watermark: mixer not verified */
+#define SINE_STEPS    128
+#define SINE_MIN_HZ   20.0
+#define SINE_MAX_HZ   20000.0
+#define REF_HZ        6000.0         /* sync pulses and chip ID tone */
+#define TONE_HZ       440.0          /* FM depth and feedback blocks */
+#define WM_OK_HZ      1000.0         /* watermark: mixer in capture state */
+#define WM_BAD_HZ     2000.0         /* watermark: mixer not verified */
+/* Not a multiple of the others, so a harmonic of one can't read as another */
+#define WM_WIN_OK_HZ  1500.0         /* watermark: Windows, mixer in capture state */
+#define WM_WIN_BAD_HZ 2500.0         /* watermark: Windows, mixer not verified */
 #define BASE_HZ  (3579545.0 / 72.0)  /* OPL2/OPL3 sample rate, 49715.9028 Hz */
 #define CLK_ELEM 2                   /* CHIPID index in the MDF profile */
 
@@ -62,8 +65,8 @@ double played(int block, int fnum) {
 }
 
 /* Carrier MULT values and their register codes */
-int mult_value[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
-int mult_code[]  = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
+static const int mult_value[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
+static const int mult_code[]  = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15 };
 
 int sine_regs(double freq, int *block, int *fnum, int *code, double *play) {
     int m;
@@ -84,6 +87,7 @@ int sine_regs(double freq, int *block, int *fnum, int *code, double *play) {
 int main() {
     int    block[STEPS], fnum[STEPS], i, rblock, rfnum, tblock, tfnum;
     int    okblock, okfnum, badblock, badfnum;
+    int    wokblock, wokfnum, wbadblock, wbadfnum;
     double freq[STEPS], play[STEPS], worst = 0.0, rate_played, ratio;
     int    sblock[SINE_STEPS], sfnum[SINE_STEPS], smult[SINE_STEPS];
     double sfreq[SINE_STEPS], splay[SINE_STEPS], sworst = 0.0;
@@ -116,7 +120,9 @@ int main() {
     if(!block_fnum(TONE_HZ, &tblock, &tfnum))
         return 1;
     if(!block_fnum(WM_OK_HZ, &okblock, &okfnum) ||
-       !block_fnum(WM_BAD_HZ, &badblock, &badfnum))
+       !block_fnum(WM_BAD_HZ, &badblock, &badfnum) ||
+       !block_fnum(WM_WIN_OK_HZ, &wokblock, &wokfnum) ||
+       !block_fnum(WM_WIN_BAD_HZ, &wbadblock, &wbadfnum))
         return 1;
     rate_played = played(rblock, rfnum);
     ratio = pow(2.0, 20-rblock)/rfnum;
@@ -139,6 +145,8 @@ int main() {
            TONE_HZ, played(tblock, tfnum));
     printf(" * Mixer watermark: %g Hz OK, %g Hz not verified, played %.2f / %.2f Hz.\n",
            WM_OK_HZ, WM_BAD_HZ, played(okblock, okfnum), played(badblock, badfnum));
+    printf(" * Under Windows: %g Hz OK, %g Hz not verified, played %.2f / %.2f Hz.\n",
+           WM_WIN_OK_HZ, WM_WIN_BAD_HZ, played(wokblock, wokfnum), played(wbadblock, wbadfnum));
     printf(" * Profile clock line:\n");
     printf(" *   CLK y %d %.6f %.6f\n", CLK_ELEM, rate_played, ratio);
     printf(" */\n\n");
@@ -158,7 +166,12 @@ int main() {
     printf("#define WM_OK_BLOCK  %d\n", okblock);
     printf("#define WM_OK_FNUM   %d\n", okfnum);
     printf("#define WM_BAD_BLOCK %d\n", badblock);
-    printf("#define WM_BAD_FNUM  %d\n\n", badfnum);
+    printf("#define WM_BAD_FNUM  %d\n", badfnum);
+    printf("/* The same under Windows */\n");
+    printf("#define WM_WIN_OK_BLOCK  %d\n", wokblock);
+    printf("#define WM_WIN_OK_FNUM   %d\n", wokfnum);
+    printf("#define WM_WIN_BAD_BLOCK %d\n", wbadblock);
+    printf("#define WM_WIN_BAD_FNUM  %d\n\n", wbadfnum);
     printf("typedef struct {\n");
     printf("    uint8_t  block;\n");
     printf("    uint16_t fnum;\n");

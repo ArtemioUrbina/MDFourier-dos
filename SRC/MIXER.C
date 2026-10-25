@@ -66,12 +66,17 @@ mix_std_t sb16_std[] = {
     { SB16_VOICE + 1,  0xF8, 0xF8, 0xF8 },
     { SB16_GAIN,       0xC0, 0x00, 0xC0 },  /* x1 */
     { SB16_GAIN + 1,   0xC0, 0x00, 0xC0 },
+    { SB16_OUTSW,      0x1F, 0x00, 0x1F },  /* no CD, line, mic */
+    { SB16_PCSPK,      0xC0, 0x00, 0xC0 }   /* minimum, -18 dB */
+};
+
+/* Spli these for when they are present. SB16 emulations (SB Live! SBEINIT doesn´t)
+ * leave them out and read whatever is written */
+mix_std_t sb16_tone_std[] = {
     { SB16_TREBLE,     0xF0, 0x80, 0xF0 },  /* flat */
     { SB16_TREBLE + 1, 0xF0, 0x80, 0xF0 },
     { SB16_BASS,       0xF0, 0x80, 0xF0 },
-    { SB16_BASS + 1,   0xF0, 0x80, 0xF0 },
-    { SB16_OUTSW,      0x1F, 0x00, 0x1F },  /* no CD, line, mic */
-    { SB16_PCSPK,      0xC0, 0x00, 0xC0 }   /* minimum, -18 dB */
+    { SB16_BASS + 1,   0xF0, 0x80, 0xF0 }
 };
 
 /* Match on ESS, the low bits are ignored on a real SB Pro */
@@ -160,9 +165,14 @@ int sb16_db(uint8_t val) {
     return 2 * ((val >> 3) - 31);
 }
 
+/* Treble and bass registers */
+int sb16_has_tone(uint16_t base) {
+    return mix_present(base, SB16_TREBLE, 0xF0) && mix_present(base, SB16_BASS, 0xF0);
+}
+
 int report_sb16(uint16_t base) {
     uint8_t mstl, mstr, fml, fmr, vol, vor, outsw, gl, gr, tl, tr, bl, br, mic, pcspk;
-    int warn, low, boost, tone0, tone, other;
+    int warn, low, boost, tone0, tone, other, has_tone;
 
     vol   = mix_read(base, SB16_VOICE);
     vor   = mix_read(base, SB16_VOICE + 1);
@@ -180,13 +190,16 @@ int report_sb16(uint16_t base) {
     mic   = (uint8_t)(mix_read(base, SB16_MIC) >> 3);
     pcspk = (uint8_t)(mix_read(base, SB16_PCSPK) >> 6);
 
+    has_tone = sb16_has_tone(base);
+
     low   = (mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31 ||
             (vol >> 3) != 31 || (vor >> 3) != 31;
     boost = gl || gr;
     /* All zero: real SB16 at minimum, or DOSBox, which starts them at
      * 0 and doesn't emulate tone controls. Can't tell which */
-    tone0 = !tl && !tr && !bl && !br;
-    tone  = !tone0 && (tl < 7 || tl > 8 || tr < 7 || tr > 8 || bl < 7 || bl > 8 || br < 7 || br > 8);
+    tone0 = has_tone && !tl && !tr && !bl && !br;
+    tone  = has_tone && !tone0 &&
+            (tl < 7 || tl > 8 || tr < 7 || tr > 8 || bl < 7 || bl > 8 || br < 7 || br > 8);
     /* CD, line, mic with any volume */
     other = (outsw & 0x1E) || ((outsw & 0x01) && mic);
     warn  = low || boost || tone0 || tone || other || pcspk;
@@ -196,8 +209,12 @@ int report_sb16(uint16_t base) {
         printf(" Mixer: SB16, master %d/%d dB, FM %d/%d dB, voice %d/%d dB, gain x%d/x%d\n",
                sb16_db(mstl), sb16_db(mstr), sb16_db(fml), sb16_db(fmr),
                sb16_db(vol), sb16_db(vor), 1 << gl, 1 << gr);
-        printf("        treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
-               tl, tr, bl, br, 6 * pcspk - 18);
+        if (has_tone)
+            printf("        treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
+                   tl, tr, bl, br, 6 * pcspk - 18);
+        else
+            printf("        no treble/bass (SB16 emulation), PC speaker %d dB\n",
+                   6 * pcspk - 18);
         printf("        to output:%s%s%s%s\n",
                (outsw & 0x06) ? " CD" : "", (outsw & 0x18) ? " line" : "",
                (outsw & 0x01) ? " mic" : "", (outsw & 0x1F) ? "" : " none");
@@ -407,7 +424,12 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
         if (!mix_present(base, SB16_VOICE, 0xF8))
             return -1;
         mix_save(base, sb16_std, COUNT(sb16_std));
-        return mix_set(base, sb16_std, COUNT(sb16_std));
+        ok = mix_set(base, sb16_std, COUNT(sb16_std));
+        if (sb16_has_tone(base)) {
+            mix_save(base, sb16_tone_std, COUNT(sb16_tone_std));
+            ok &= mix_set(base, sb16_tone_std, COUNT(sb16_tone_std));
+        }
+        return ok;
     }
     return -1;
 }

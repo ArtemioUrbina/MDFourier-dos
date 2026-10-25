@@ -12,11 +12,11 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h &
+       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
@@ -60,6 +60,9 @@ build\wss.obj: src\wss.c $(HDRS)
 
 build\sax.obj: src\sax.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\sax.c
+
+build\host.obj: src\host.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\host.c
 
 build\env.obj: src\env.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\env.c

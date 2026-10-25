@@ -4,6 +4,7 @@
 #include "kbd.h"
 #include "sweep.h"
 #include "pcm.h"
+#include "host.h"
 
 /*
  * TIMING
@@ -46,7 +47,7 @@ int stereo;
 unsigned long seq_frames;
 
 int check_abort() {
-    if (!aborted && vsync_first_bad()) {
+    if (!aborted && !host_is_windows() && vsync_first_bad()) {
         aborted  = 1;
         bad_stop = 1;
     }
@@ -285,11 +286,18 @@ void gap(uint8_t channel, unsigned frames, prep_t prep) {
         case PREP_PULSES:
             pulse_prepare(channel);
             break;
+        /* Under Windows id with 1500 and 2500 Hz */
         case PREP_WM_OK:
-            opl_note_set(channel, WM_OK_BLOCK, WM_OK_FNUM);
+            if (host_is_windows())
+                opl_note_set(channel, WM_WIN_OK_BLOCK, WM_WIN_OK_FNUM);
+            else
+                opl_note_set(channel, WM_OK_BLOCK, WM_OK_FNUM);
             break;
         case PREP_WM_BAD:
-            opl_note_set(channel, WM_BAD_BLOCK, WM_BAD_FNUM);
+            if (host_is_windows())
+                opl_note_set(channel, WM_WIN_BAD_BLOCK, WM_WIN_BAD_FNUM);
+            else
+                opl_note_set(channel, WM_BAD_BLOCK, WM_BAD_FNUM);
             break;
         case PREP_FM:
             sweep_prepare(channel, OPL_INSTRUMENT_DEFAULT);
@@ -419,6 +427,8 @@ int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixe
 
     kbd_poll_escape();
     printf("Press ESC to abort\n");
+
+    vsync_set_tolerant(host_is_windows());
 
     /* Align the first key-on to a frame edge */
     vsync_begin();

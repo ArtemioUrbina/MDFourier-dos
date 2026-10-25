@@ -35,6 +35,7 @@
 #include "dsp.h"
 #include "mixer.h"
 #include "pit.h"
+#include "host.h"
 
 #define DSP_READ_READY  0x0E    /* reading it acks the 8-bit IRQ */
 #define DSP_ACK_16      0x0F    /* reading it acks the 16-bit IRQ, DSP 4.xx */
@@ -145,6 +146,7 @@ void pcmx_finish();
 int  pcmx_print_report();
 int  pcm_counts_ok();
 unsigned pcm_transfers();
+unsigned pcm_transfers_got();
 
 /* ---- 8259 ---- */
 
@@ -410,13 +412,18 @@ int pcm_init(blaster_cfg_t *cfg, double frame_hz) {
     }
 
     found_irq = dsp_probe_irq();
-    if (found_irq && found_irq != sb_irq) {
+    /* Windows virtualizes the PIC, its IRR may not show the real line */
+    if (found_irq && found_irq != sb_irq && host_is_windows())
+        printf(" PCM: test transfer raised IRQ %u, BLASTER says I%d. Windows virtualizes\n"
+               "      the PIC, check BLASTER I if the IRQ counts come out missing\n",
+               found_irq, cfg->irq);
+    else if (found_irq && found_irq != sb_irq) {
         printf(" PCM: the DSP raised IRQ %u, BLASTER says I%d. Set BLASTER I%u\n"
                "      (or fix the card's setup) and run again\n", found_irq, cfg->irq, found_irq);
         irq_mismatch = 1;
         return 0;
     }
-    if (!found_irq)
+    if (!found_irq && !host_is_windows())
         printf(" PCM: no IRQ seen in a test transfer, check BLASTER I%d and the card's setup\n",
                cfg->irq);
 
@@ -476,18 +483,32 @@ void pcm_clock_start() {
         dsp_busy = 1;
 }
 
-/* One IRQ should have come */
-void pcm_clock_stop() {
-    if (!pcm_ready)
-        return;
+/* One IRQ should have come
+ * The clock's IRQ can come after its block ends: the transfer fills 95% of it, ~43 ms to spare.
+ *
+ * A DOS box in Windows can be held longer or SB16 emulation (SB Live!, DOS and Windows)
+ * signals its end late. It is counted at the next start instead, in the idle block */
+int clock_pending;
 
-    count_clock.got = irq_count;
+void clock_settle() {
+    count_clock.got = irq_count >= 1;
 
     if (irq_count >= 1) {
         dma_mask(sb_dma);
         dsp_busy = 0;
     } else
         recover();
+    clock_pending = 0;
+}
+
+void pcm_clock_stop() {
+    if (!pcm_ready)
+        return;
+
+    if (irq_count < 1)
+        clock_pending = 1;
+    else
+        clock_settle();
 }
 
 /* ---- Steps ---- */
@@ -574,6 +595,9 @@ void pcm_step_start(pcm_steps_t kind, unsigned buf) {
     if (!pcm_ready)
         return;
 
+    if (clock_pending)
+        clock_settle();
+
     if (step_pending) {
         if (irq_count != step_irq_base)
             count->got++;
@@ -614,6 +638,9 @@ void pcm_finish() {
     if (!pcm_ready)
         return;
 
+    if (clock_pending)
+        clock_settle();
+
     pcmx_finish();
     dma_mask(sb_dma);
 
@@ -651,8 +678,14 @@ void pcm_print_report() {
     printf("\n");
     ok &= pcmx_print_report();
 
-    if (!ok)
+    if (!ok && !pcm_transfers_got()) {
         printf("  WARNING: PCM IRQ %u missing, check BLASTER I and the card's jumpers\n", sb_irq);
+        /* Windows DMA buffer may be smaller than a tone loop buffer */
+        if (host_is_windows())
+            printf("  NOTE: under Windows, try [386Enh] DMABufferSize=64 in SYSTEM.INI\n");
+    } else if (!ok)
+        printf("  WARNING: %u of %u transfers without their IRQ in time, late or stopped\n",
+               pcm_transfers() - pcm_transfers_got(), pcm_transfers());
 }
 
 /* ======================================================================
@@ -970,7 +1003,10 @@ void pcmx_init(blaster_cfg_t *cfg) {
 
     if (dsp_major >= 4 && cfg->high_dma >= 5 && cfg->high_dma <= 7)
         pcm16 = &sb16_driver;
-    /* DSP 3.01 with the ESS ID: Extended mode, no high DMA */
+    /* DSP 3.01 with the ESS ID: Extended mode, no high DMA
+     * Windows owns the hardware behind the SB interface */
+    else if (sbpro_path && host_is_windows())
+        pcm16 = NULL;
     else if (sbpro_path && is_ess(sb_base))
         pcm16 = &ess_driver;
     /* Other SB Pro compatibles: a WSS codec next to it (OPL3-SAx), SAX.C */
@@ -990,6 +1026,7 @@ void pcmx_init(blaster_cfg_t *cfg) {
     } else
         printf(" PCM: 8-bit mono, 8-bit stereo, 16-bit not played (%s)\n",
                dsp_major >= 4 ? "BLASTER has no H5-H7" :
+               host_is_windows() ? "under Windows only through a DSP 4.xx" :
                sax_no_16bit_reason() ? sax_no_16bit_reason() : "needs DSP 4.xx");
 }
 
@@ -1266,6 +1303,15 @@ int pcm_counts_ok() {
         if (pcmx_counts[kind].got != pcmx_counts[kind].expected)
             return 0;
     return 1;
+}
+
+unsigned pcm_transfers_got() {
+    unsigned kind, total;
+
+    total = count_clock.got + count_steps[PCM_SWEEP].got + count_steps[PCM_LEVEL].got;
+    for (kind = 0; kind < PCMX_KIND_COUNT; kind++)
+        total += pcmx_counts[kind].got;
+    return total;
 }
 
 unsigned pcm_transfers() {
