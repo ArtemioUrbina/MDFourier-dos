@@ -13,10 +13,10 @@ extern uint16_t sb_base;
 extern uint8_t  sb_irq, sb_dma;
 
 /* IRQs served, any driver */
-extern volatile unsigned irq_count;
+extern volatile unsigned pcm_irq_count;
 
 /* Stopped transfer. DSP reset, back to the 8-bit mono rate, speaker on */
-void recover();
+void pcm_recover();
 
 /* ---- 8237, channels 0-3 ---- */
 #define DMA_MASK        0x0A

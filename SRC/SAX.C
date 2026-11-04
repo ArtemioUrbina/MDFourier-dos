@@ -48,15 +48,15 @@ char     sax_reason[64];
 #define AUX2_SB_LEVEL   0x05    /* 1.5 dB steps, 08h = 0 dB: +4.5 dB */
 #define AUX_LEVEL_BITS  0x1F
 
-int     aux2_saved;
-uint8_t aux2_saved_l, aux2_saved_r;
+int     sax_aux2_saved;
+uint8_t sax_aux2_saved_l, sax_aux2_saved_r;
 
 void sax_aux2_restore() {
-    if (!aux2_saved)
+    if (!sax_aux2_saved)
         return;
-    wss_out(WSS_AUX2_L, aux2_saved_l, 0);
-    wss_out(WSS_AUX2_R, aux2_saved_r, 0);
-    aux2_saved = 0;
+    wss_out(WSS_AUX2_L, sax_aux2_saved_l, 0);
+    wss_out(WSS_AUX2_R, sax_aux2_saved_r, 0);
+    sax_aux2_saved = 0;
 }
 
 /* For /V */
@@ -77,11 +77,11 @@ void sax_codec_found(char *when) {
     wss_select(sax_codec_port);
     sax_dump(when);
 
-    aux2_saved_l = wss_in(WSS_AUX2_L);
-    aux2_saved_r = wss_in(WSS_AUX2_R);
-    wss_out(WSS_AUX2_L, (uint8_t)((aux2_saved_l & ~AUX_LEVEL_BITS) | AUX2_SB_LEVEL), 0);
-    wss_out(WSS_AUX2_R, (uint8_t)((aux2_saved_r & ~AUX_LEVEL_BITS) | AUX2_SB_LEVEL), 0);
-    aux2_saved = 1;
+    sax_aux2_saved_l = wss_in(WSS_AUX2_L);
+    sax_aux2_saved_r = wss_in(WSS_AUX2_R);
+    wss_out(WSS_AUX2_L, (uint8_t)((sax_aux2_saved_l & ~AUX_LEVEL_BITS) | AUX2_SB_LEVEL), 0);
+    wss_out(WSS_AUX2_R, (uint8_t)((sax_aux2_saved_r & ~AUX_LEVEL_BITS) | AUX2_SB_LEVEL), 0);
+    sax_aux2_saved = 1;
     atexit(sax_aux2_restore);
 }
 
@@ -111,12 +111,12 @@ unsigned sax_ctrl_port;         /* 0 means not found */
 uint8_t  sax_version;
 int      sax_probed;
 
-uint8_t ctrl_in(uint8_t reg) {
+uint8_t sax_ctrl_in(uint8_t reg) {
     outp(sax_ctrl_port, reg);
     return (uint8_t)inp(sax_ctrl_port + 1);
 }
 
-void ctrl_out(uint8_t reg, uint8_t val) {
+void sax_ctrl_out(uint8_t reg, uint8_t val) {
     outp(sax_ctrl_port, reg);
     outp(sax_ctrl_port + 1, val);
 }
@@ -127,21 +127,21 @@ int sax_ctrl_present(unsigned port) {
     uint8_t misc, again, master, test;
 
     sax_ctrl_port = port;
-    misc = ctrl_in(SAX_MISC);
+    misc = sax_ctrl_in(SAX_MISC);
     if (misc == 0xFF || !(misc & SAX_VERSION))
         return 0;
 
-    ctrl_out(SAX_MISC, (uint8_t)(misc ^ SAX_VERSION));
-    again = ctrl_in(SAX_MISC);
-    ctrl_out(SAX_MISC, misc);
+    sax_ctrl_out(SAX_MISC, (uint8_t)(misc ^ SAX_VERSION));
+    again = sax_ctrl_in(SAX_MISC);
+    sax_ctrl_out(SAX_MISC, misc);
     if ((again & SAX_VERSION) != (misc & SAX_VERSION))
         return 0;
 
-    master = ctrl_in(SAX_MASTER_L);
+    master = sax_ctrl_in(SAX_MASTER_L);
     test = (uint8_t)(master ^ 0x0F);
-    ctrl_out(SAX_MASTER_L, test);
-    again = ctrl_in(SAX_MASTER_L);
-    ctrl_out(SAX_MASTER_L, master);
+    sax_ctrl_out(SAX_MASTER_L, test);
+    again = sax_ctrl_in(SAX_MASTER_L);
+    sax_ctrl_out(SAX_MASTER_L, master);
     if ((again & 0x8F) != (test & 0x8F))
         return 0;
 
@@ -195,7 +195,7 @@ void sax_mixer_restore() {
     unsigned i;
 
     for (i = 0; i < sax_saved_count; i++)
-        ctrl_out(sax_std[i].reg, sax_saved[i]);
+        sax_ctrl_out(sax_std[i].reg, sax_saved[i]);
 
     sax_saved_count = 0;
 }
@@ -208,9 +208,9 @@ void sax_probe() {
         return;
 
     sax_probed = 1;
-    if (wss_cfg.mode == WSS_MANUAL) {
-        if (wss_present(wss_cfg.port))
-            sax_codec_port = wss_cfg.port;
+    if (env_wss_cfg.mode == WSS_MANUAL) {
+        if (wss_present(env_wss_cfg.port))
+            sax_codec_port = env_wss_cfg.port;
     }
     else
         sax_find_codec();
@@ -229,8 +229,8 @@ int sax_mixer_set() {
 
     count = sax_std_count();
     for (i = 0; i < count; i++) {
-        sax_saved[i] = ctrl_in(sax_std[i].reg);
-        ctrl_out(sax_std[i].reg, (uint8_t)((sax_saved[i] & ~sax_std[i].mask) | sax_std[i].value));
+        sax_saved[i] = sax_ctrl_in(sax_std[i].reg);
+        sax_ctrl_out(sax_std[i].reg, (uint8_t)((sax_saved[i] & ~sax_std[i].mask) | sax_std[i].value));
     }
 
     if (!sax_saved_count)
@@ -238,7 +238,7 @@ int sax_mixer_set() {
     sax_saved_count = count;
 
     for (i = 0; i < count; i++)
-        if ((ctrl_in(sax_std[i].reg) & sax_std[i].mask) != sax_std[i].value)
+        if ((sax_ctrl_in(sax_std[i].reg) & sax_std[i].mask) != sax_std[i].value)
             ok = 0;
 
     return ok;
@@ -268,18 +268,18 @@ int sax_mixer_report() {
         return MIXER_UNKNOWN;
     }
 
-    mstl      = ctrl_in(SAX_MASTER_L);
-    mstr      = ctrl_in(SAX_MASTER_R);
-    mic       = ctrl_in(SAX_MIC);
-    misc      = ctrl_in(SAX_MISC);
-    power     = (uint8_t)(ctrl_in(SAX_POWER) & 0x07);
+    mstl      = sax_ctrl_in(SAX_MASTER_L);
+    mstr      = sax_ctrl_in(SAX_MASTER_R);
+    mic       = sax_ctrl_in(SAX_MIC);
+    misc      = sax_ctrl_in(SAX_MISC);
+    power     = (uint8_t)(sax_ctrl_in(SAX_POWER) & 0x07);
     /* 13h and up are SA3 registers, an SA2 reads something else there */
     analog_pd = 0;
     if (sax_has_3d()) {
-        analog_pd = (uint8_t)(ctrl_in(SAX_ANALOG_PD) & 0x1F);
-        wide   = (uint8_t)(ctrl_in(SAX_WIDE) & 0x77);
-        bass   = (uint8_t)(ctrl_in(SAX_BASS) & 0x77);
-        treble = (uint8_t)(ctrl_in(SAX_TREBLE) & 0x77);
+        analog_pd = (uint8_t)(sax_ctrl_in(SAX_ANALOG_PD) & 0x1F);
+        wide   = (uint8_t)(sax_ctrl_in(SAX_WIDE) & 0x77);
+        bass   = (uint8_t)(sax_ctrl_in(SAX_BASS) & 0x77);
+        treble = (uint8_t)(sax_ctrl_in(SAX_TREBLE) & 0x77);
     }
 
     low          = (mstl & 0x8F) || (mstr & 0x8F);
@@ -382,23 +382,23 @@ void sax_detect() {
     int irq = -1, dma = -1;
 
     sax_probe();
-    if (wss_cfg.mode == WSS_MANUAL) {
+    if (env_wss_cfg.mode == WSS_MANUAL) {
         if (!sax_codec_port) {
-            sprintf(sax_reason, "no WSS codec at 0x%03X, check /W", wss_cfg.port);
+            sprintf(sax_reason, "no WSS codec at 0x%03X, check /W", env_wss_cfg.port);
             return;
         }
         sax_codec_found("at start");
-        wss_use(sax_codec_port, (uint8_t)wss_cfg.irq, (uint8_t)wss_cfg.dma);
+        wss_use(sax_codec_port, (uint8_t)env_wss_cfg.irq, (uint8_t)env_wss_cfg.dma);
         return;
     }
 
     if (!sax_codec_port) {
-        if (wss_cfg.mode == WSS_AUTO)
+        if (env_wss_cfg.mode == WSS_AUTO)
             sprintf(sax_reason, "no WSS codec found for /W:AUTO");
         return;
     }
 
-    if (wss_cfg.mode == WSS_OFF) {
+    if (env_wss_cfg.mode == WSS_OFF) {
         sax_codec_found("not used (/W:OFF)");
         sprintf(sax_reason, "WSS codec at 0x%03X left out by /W:OFF", sax_codec_port);
         return;
@@ -407,17 +407,17 @@ void sax_detect() {
     sax_codec_found("at start");
 
     /* A card whose mixer MDF sets needs no /W: as /W:AUTO */
-    if (wss_cfg.mode == WSS_UNSET && sax_ctrl_port) {
-        wss_cfg.mode = WSS_AUTO;
+    if (env_wss_cfg.mode == WSS_UNSET && sax_ctrl_port) {
+        env_wss_cfg.mode = WSS_AUTO;
         if (verbose)
             printf(" PCM: WSS codec at 0x%03X, %s mixer known: /W:AUTO\n",
                    sax_codec_port, sax_name());
     }
 
     /* Without /W the run stops here */
-    sax_codec_settings(&irq, &dma, wss_cfg.mode == WSS_UNSET);
+    sax_codec_settings(&irq, &dma, env_wss_cfg.mode == WSS_UNSET);
 
-    if (wss_cfg.mode == WSS_UNSET) {
+    if (env_wss_cfg.mode == WSS_UNSET) {
         sax_print_options(irq, dma);
         sax_needs_cfg = 1;
         return;

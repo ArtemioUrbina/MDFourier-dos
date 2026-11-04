@@ -15,12 +15,10 @@
 #include "opl.h"
 #include "pit.h"
 #include "vsync.h"
-#include "opltone.h"
 #include "mdf.h"
+#include "seq.h"
 #include "kbd.h"
 #include "host.h"
-
-#define SWEEP_FRAMES 20
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
@@ -33,7 +31,31 @@
 #define EXIT_WSS        7   /* WSS codec found, /W needed */
 #define EXIT_BAD_IRQ    8   /* the DSP raises another IRQ than BLASTER I */
 
-int timing_test(double hz);
+/* /T: 30 s of frames, no sound, to see how the timing holds. Under
+ * Windows tolerant as the sequence would run */
+#define TIMING_SECONDS  30
+
+int timing_test(double hz) {
+    vsync_stats_t stats;
+    unsigned long frames = (unsigned long)(hz * TIMING_SECONDS), frame;
+
+    printf(" Timing: %.4f Hz (%.4f ms per frame), %lu frames, ESC stops\n",
+           hz, 1000.0 / hz, frames);
+    kbd_poll_escape();
+    vsync_set_tolerant(host_is_windows());
+    vsync_begin();
+    for (frame = 0; frame < frames; frame++) {
+        if (kbd_poll_escape())
+            break;
+        vsync_wait();
+    }
+    vsync_end(&stats);
+    vsync_print_stats(&stats, frame);
+    /* The DOS sequence would have stopped at the first one */
+    if (stats.bad && !host_is_windows())
+        printf("  first bad frame: %lu\n", vsync_first_bad());
+    return stats.bad ? EXIT_BAD_FRAMES : EXIT_OK;
+}
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
@@ -44,7 +66,7 @@ int main(int argc, char *argv[]) {
     int           sbpro_compatible = 0;
     int           timing_only = 0;
 
-    printf("MDFourier DOS 0.954 [240p Test Suite Fourier Audio compare tool]\n");
+    printf("MDFourier DOS 0.955 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
 
     for (i = 1; i < argc; i++) {
@@ -69,7 +91,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (bad_option) {
-        printf("Usage: MDF [/K] [/R] [/T] [/V] [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
+        printf("Usage: MDF [/C[:port]] [/K] [/R] [/T] [/V] [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
                "  Needs a 486SX or faster with internal cache enabled\n"
                "  The mixer levels are set for playback and restored at exit\n"
                "  /K  keep the current mixer settings and play sequence\n"
@@ -95,12 +117,12 @@ int main(int argc, char *argv[]) {
         else {
             pit_init();
             if (pit_check_rate())
-                printf(" Timing: Windows PIT, %.0f clocks per BIOS tick, %s\n"
+                printf(" Timing: Windows' PIT, %.0f clocks per BIOS tick, %s\n"
                        "   (no CPU time stamp counter: %s)\n",
                        pit_ticks_measured(), pit_rate_mode(), pit_tsc_failure());
             else
                 printf(" Timing: no CPU time stamp counter (%s),\n"
-                       "   Windows PIT may not time the frames\n", pit_tsc_failure());
+                       "   Windows' PIT may not time the frames\n", pit_tsc_failure());
         }
     } else
         pit_init();
@@ -108,18 +130,16 @@ int main(int argc, char *argv[]) {
     if (!env_get_blaster(&cfg))
         printf(" BLASTER: not set, PCM and the mixer need it\n");
     else if (verbose)
-        print_env(&cfg);
+        env_print(&cfg);
 
-    /* NT has no hardware access.
-     * Windows 3.x/9x DOS box has looser timing
-     * We watermark both. This is just for curiosity or testing windows only cards */
+    /* NT has no hardware access. A Windows 3.x/9x DOS box runs, with
+     * looser timing, SB paths only and the Windows watermark */
     if (host_detect() == HOST_NT) {
         printf("Running under %s is not supported, it has no access to the\n"
                "hardware. Use DOS, or Windows 9x in MS-DOS mode\n", host_name());
         return EXIT_WINDOWS;
     }
-    
-    /* DOS box PIF for each version*/
+    /* What the DOS box's PIF should have, in each version's own terms */
     if (host_is_windows()) {
         printf(" %s DOS box: recorded with the Windows watermark,\n"
                "   ESS Extended mode and WSS codecs are left to Windows\n", host_name());
@@ -153,11 +173,11 @@ int main(int argc, char *argv[]) {
         } else {
             if (verbose)
                 printf(" DSP: version %u.%02u%s\n", ver.major, ver.minor,
-                       is_ess(base) ? ", ESS" : "");
+                       mixer_is_ess(base) ? ", ESS" : "");
             /* SB Pro compatibles, check for WSS codec next to the DSP */
             if (ver.major == 3 && host_is_windows())
                 wss_ignored = "Windows owns the card's 16-bit hardware";
-            else if (ver.major == 3 && !is_ess(base))
+            else if (ver.major == 3 && !mixer_is_ess(base))
                 sbpro_compatible = 1;
             else if (ver.major == 3)
                 wss_ignored = "ESS plays 16-bit in its Extended mode";
@@ -170,7 +190,7 @@ int main(int argc, char *argv[]) {
         wss_ignored = "no BLASTER A";
 
     if (report_only) {
-        if (wss_cfg.mode != WSS_UNSET)
+        if (env_wss_cfg.mode != WSS_UNSET)
             printf(" /W: ignored, /R only reports the mixer\n");
         mixer_report(&cfg);
         if (sbpro_compatible)
@@ -178,7 +198,7 @@ int main(int argc, char *argv[]) {
         return EXIT_OK;
     }
 
-    if (wss_ignored && wss_cfg.mode != WSS_UNSET)
+    if (wss_ignored && env_wss_cfg.mode != WSS_UNSET)
         printf(" /W: ignored, %s\n", wss_ignored);
 
     if (sbpro_compatible)
@@ -209,6 +229,7 @@ int main(int argc, char *argv[]) {
     }
 
     mixer = mixer_report(&cfg);
+
     /* The OPL3-SAx  */
     if (sbpro_compatible) {
         int sax_mixer = sax_mixer_report();
@@ -245,7 +266,7 @@ int main(int argc, char *argv[]) {
             opl3_set_new_mode(1);
 
         printf("Playing MDFourier...\n");
-        result = mdf_run_full_test(0, SWEEP_FRAMES, stereo, mixer_ok);
+        result = mdf_run_full_test(stereo, mixer_ok);
 
         /* silence the chip */
         opl_driver.reset();
@@ -255,35 +276,9 @@ int main(int argc, char *argv[]) {
         return EXIT_NO_FM;
     }
 
-    if (result == MDF_ABORTED)
+    if (result == SEQ_ABORTED)
         return EXIT_ABORTED;
-    if (result == MDF_BAD_FRAMES)
+    if (result == SEQ_BAD_FRAMES)
         return EXIT_BAD_FRAMES;
     return EXIT_OK;
-}
-
-#define TIMING_SECONDS  30
-
-int timing_test(double hz) {
-    vsync_stats_t stats;
-    unsigned long frames = (unsigned long)(hz * TIMING_SECONDS), frame;
-
-    printf(" Timing: %.4f Hz (%.4f ms per frame), %lu frames, ESC stops\n",
-           hz, 1000.0 / hz, frames);
-           
-    kbd_poll_escape();
-    vsync_set_tolerant(host_is_windows());
-    vsync_begin();
-    for (frame = 0; frame < frames; frame++) {
-        if (kbd_poll_escape())
-            break;
-        vsync_wait();
-    }
-    vsync_end(&stats);
-    vsync_print_stats(&stats, frame);
-    
-    /* The DOS sequence would have stopped at the first one */
-    if (stats.bad && !host_is_windows())
-        printf("  first bad frame: %lu\n", vsync_first_bad());
-    return stats.bad ? EXIT_BAD_FRAMES : EXIT_OK;
 }

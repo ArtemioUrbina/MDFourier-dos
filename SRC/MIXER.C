@@ -57,7 +57,7 @@ typedef struct {
     uint8_t check;
 } mix_std_t;
 
-mix_std_t sb16_std[] = {
+mix_std_t mixer_sb16_std[] = {
     { SB16_MASTER,     0xF8, 0xF8, 0xF8 },  /* 0 dB */
     { SB16_MASTER + 1, 0xF8, 0xF8, 0xF8 },
     { SB16_FM,         0xF8, 0xF8, 0xF8 },
@@ -72,7 +72,7 @@ mix_std_t sb16_std[] = {
 
 /* Spli these for when they are present. SB16 emulations (SB Live! SBEINIT doesn´t)
  * leave them out and read whatever is written */
-mix_std_t sb16_tone_std[] = {
+mix_std_t mixer_sb16_tone_std[] = {
     { SB16_TREBLE,     0xF0, 0x80, 0xF0 },  /* flat */
     { SB16_TREBLE + 1, 0xF0, 0x80, 0xF0 },
     { SB16_BASS,       0xF0, 0x80, 0xF0 },
@@ -80,7 +80,7 @@ mix_std_t sb16_tone_std[] = {
 };
 
 /* Match on ESS, the low bits are ignored on a real SB Pro */
-mix_std_t sbpro_std[] = {
+mix_std_t mixer_sbpro_std[] = {
     { SBP_MASTER,      0xFF, 0xFF, 0xEE },  /* max */
     { SBP_FM,          0xFF, 0xFF, 0xEE },
     { SBP_VOICE,       0xFF, 0xFF, 0xEE },  /* PCM max, on ESS 0 dB */
@@ -90,7 +90,7 @@ mix_std_t sbpro_std[] = {
 };
 
 /* In ESS set the extended registers, after the SB Pro view */
-mix_std_t ess_std[] = {
+mix_std_t mixer_ess_std[] = {
     { ESS_MASTER,      0x7F, 0x3F, 0x7F },  /* max, not muted */
     { ESS_MASTER + 2,  0x7F, 0x3F, 0x7F },
     { ESS_FM,          0xFF, 0x88, 0xFF },  /* 0 dB, 15 is +10.5 dB */
@@ -108,10 +108,10 @@ mix_std_t ess_std[] = {
 /* Previous state, for mixer_restore(), in write order */
 #define MIX_SAVE_MAX 24
 
-uint16_t saved_base;
-unsigned saved_count;
-uint8_t  saved_reg[MIX_SAVE_MAX];
-uint8_t  saved_val[MIX_SAVE_MAX];
+uint16_t mixer_saved_base;
+unsigned mixer_saved_count;
+uint8_t  mixer_saved_reg[MIX_SAVE_MAX];
+uint8_t  mixer_saved_val[MIX_SAVE_MAX];
 
 uint8_t mix_read(uint16_t base, uint8_t reg) {
     outp(base + MIX_INDEX, reg);
@@ -143,34 +143,34 @@ int mix_present(uint16_t base, uint8_t reg, uint8_t mask) {
  * unknown command on a Creative DSP only times out */
 #define DSP_ESS_ID  0xE7
 
-int ess_found = -1;
+int mixer_ess_found = -1;
 
-int is_ess(uint16_t base) {
-    if (ess_found < 0) {
-        ess_found = 0;
+int mixer_is_ess(uint16_t base) {
+    if (mixer_ess_found < 0) {
+        mixer_ess_found = 0;
         if (dsp_reset(base) && dsp_write(base, DSP_ESS_ID)) {
             int id_hi = dsp_read(base);
             int id_lo = dsp_read(base);
 
-            ess_found = id_hi == 0x68 && (id_lo & 0xF0) == 0x80;
+            mixer_ess_found = id_hi == 0x68 && (id_lo & 0xF0) == 0x80;
         }
         dsp_reset(base);
-        if (!ess_found && mix_read(base, ESS_ID) == 0x18)
-            ess_found = 1;
+        if (!mixer_ess_found && mix_read(base, ESS_ID) == 0x18)
+            mixer_ess_found = 1;
     }
-    return ess_found;
+    return mixer_ess_found;
 }
 
-int sb16_db(uint8_t val) {
+int mixer_sb16_db(uint8_t val) {
     return 2 * ((val >> 3) - 31);
 }
 
 /* Treble and bass registers */
-int sb16_has_tone(uint16_t base) {
+int mixer_sb16_has_tone(uint16_t base) {
     return mix_present(base, SB16_TREBLE, 0xF0) && mix_present(base, SB16_BASS, 0xF0);
 }
 
-int report_sb16(uint16_t base) {
+int mixer_report_sb16(uint16_t base) {
     uint8_t mstl, mstr, fml, fmr, vol, vor, outsw, gl, gr, tl, tr, bl, br, mic, pcspk;
     int warn, low, boost, tone0, tone, other, has_tone;
 
@@ -190,7 +190,7 @@ int report_sb16(uint16_t base) {
     mic   = (uint8_t)(mix_read(base, SB16_MIC) >> 3);
     pcspk = (uint8_t)(mix_read(base, SB16_PCSPK) >> 6);
 
-    has_tone = sb16_has_tone(base);
+    has_tone = mixer_sb16_has_tone(base);
 
     low   = (mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31 ||
             (vol >> 3) != 31 || (vor >> 3) != 31;
@@ -207,8 +207,8 @@ int report_sb16(uint16_t base) {
     /* The levels only when asked or when something is off */
     if (verbose || warn) {
         printf(" Mixer: SB16, master %d/%d dB, FM %d/%d dB, voice %d/%d dB, gain x%d/x%d\n",
-               sb16_db(mstl), sb16_db(mstr), sb16_db(fml), sb16_db(fmr),
-               sb16_db(vol), sb16_db(vor), 1 << gl, 1 << gr);
+               mixer_sb16_db(mstl), mixer_sb16_db(mstr), mixer_sb16_db(fml), mixer_sb16_db(fmr),
+               mixer_sb16_db(vol), mixer_sb16_db(vor), 1 << gl, 1 << gr);
         if (has_tone)
             printf("        treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
                    tl, tr, bl, br, 6 * pcspk - 18);
@@ -242,7 +242,7 @@ int report_sb16(uint16_t base) {
 }
 
 /* Only tested in DosBox */
-int report_sbpro(uint16_t base) {
+int mixer_report_sbpro(uint16_t base) {
     uint8_t mst, fm, voice, cd, line, mic;
     int warn, low, other;
 
@@ -279,7 +279,7 @@ int report_sbpro(uint16_t base) {
 }
 
 /* ESS extended registers, the SB Pro view hides mutes */
-int report_ess(uint16_t base) {
+int mixer_report_ess(uint16_t base) {
     uint8_t mstl, mstr, fm, voice, cd, line, mic, aux, mono, pcspk, mmix, d3;
     int warn, low, other;
 
@@ -347,18 +347,18 @@ int mixer_report(blaster_cfg_t *cfg) {
     case 4:
     case 5:
         /* ESS18 via ID. The voice test would leave it a step lower */
-        if (is_ess(base))
-            return report_ess(base);
+        if (mixer_is_ess(base))
+            return mixer_report_ess(base);
         if (mix_present(base, SBP_VOICE, 0xEE))
-            return report_sbpro(base);
+            return mixer_report_sbpro(base);
         printf(" Mixer: SB Pro expected, not answering (check BLASTER A and T)\n");
         return MIXER_UNKNOWN;
     case 6:
         /* ESS set up as T6 */
-        if (is_ess(base))
-            return report_ess(base);
+        if (mixer_is_ess(base))
+            return mixer_report_ess(base);
         if (mix_present(base, SB16_VOICE, 0xF8))
-            return(report_sb16(base));
+            return(mixer_report_sb16(base));
         printf(" Mixer: SB16 expected, not answering (check BLASTER A and T)\n");
         return MIXER_UNKNOWN;
     default:
@@ -370,11 +370,11 @@ int mixer_report(blaster_cfg_t *cfg) {
 void mix_save(uint16_t base, mix_std_t *std, unsigned count) {
     unsigned i;
 
-    saved_base = base;
-    for (i = 0; i < count && saved_count < MIX_SAVE_MAX; i++) {
-        saved_reg[saved_count] = std[i].reg;
-        saved_val[saved_count] = mix_read(base, std[i].reg);
-        saved_count++;
+    mixer_saved_base = base;
+    for (i = 0; i < count && mixer_saved_count < MIX_SAVE_MAX; i++) {
+        mixer_saved_reg[mixer_saved_count] = std[i].reg;
+        mixer_saved_val[mixer_saved_count] = mix_read(base, std[i].reg);
+        mixer_saved_count++;
     }
 }
 
@@ -404,11 +404,11 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
 
     /* ESS by ID */
     if ((cfg->type == 2 || cfg->type == 4 || 
-    		cfg->type == 5 || cfg->type == 6) && is_ess(base)) {
-        mix_save(base, sbpro_std, COUNT(sbpro_std));
-        mix_save(base, ess_std, COUNT(ess_std));
-        ok = mix_set(base, sbpro_std, COUNT(sbpro_std));
-        ok &= mix_set(base, ess_std, COUNT(ess_std));
+    		cfg->type == 5 || cfg->type == 6) && mixer_is_ess(base)) {
+        mix_save(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
+        mix_save(base, mixer_ess_std, COUNT(mixer_ess_std));
+        ok = mix_set(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
+        ok &= mix_set(base, mixer_ess_std, COUNT(mixer_ess_std));
         return ok;
     }
 
@@ -418,16 +418,16 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
     case 5:
         if (!mix_present(base, SBP_VOICE, 0xEE))
             return -1;
-        mix_save(base, sbpro_std, COUNT(sbpro_std));
-        return mix_set(base, sbpro_std, COUNT(sbpro_std));
+        mix_save(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
+        return mix_set(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
     case 6:
         if (!mix_present(base, SB16_VOICE, 0xF8))
             return -1;
-        mix_save(base, sb16_std, COUNT(sb16_std));
-        ok = mix_set(base, sb16_std, COUNT(sb16_std));
-        if (sb16_has_tone(base)) {
-            mix_save(base, sb16_tone_std, COUNT(sb16_tone_std));
-            ok &= mix_set(base, sb16_tone_std, COUNT(sb16_tone_std));
+        mix_save(base, mixer_sb16_std, COUNT(mixer_sb16_std));
+        ok = mix_set(base, mixer_sb16_std, COUNT(mixer_sb16_std));
+        if (mixer_sb16_has_tone(base)) {
+            mix_save(base, mixer_sb16_tone_std, COUNT(mixer_sb16_tone_std));
+            ok &= mix_set(base, mixer_sb16_tone_std, COUNT(mixer_sb16_tone_std));
         }
         return ok;
     }
@@ -437,7 +437,7 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
 void mixer_restore() {
     unsigned i;
 
-    for (i = 0; i < saved_count; i++)
-        mix_write(saved_base, saved_reg[i], saved_val[i]);
-    saved_count = 0;
+    for (i = 0; i < mixer_saved_count; i++)
+        mix_write(mixer_saved_base, mixer_saved_reg[i], mixer_saved_val[i]);
+    mixer_saved_count = 0;
 }

@@ -3,8 +3,8 @@
  *
  * DSP 3.01 in compatibility mode only plays 16-bit stereo to 11 kHz.
  * Extended mode plays it to 48 kHz on the same 8-bit DMA channel, the
- * FIFO gets bytes: low, high, first channel, then the second. The data
- * sheet says left first, measured on an ES1868/9 the first plays right
+ * FIFO gets bytes: low, high, left channel and right chammeñ
+ * data sheet says
  *
  * Its registers are written as command, value (0xA1 then the divider)
  * and read with 0xC0, register. The mono and 8-bit stereo blocks stay
@@ -131,7 +131,7 @@ char *ess_begin() {
     if (ess_setup())
         return NULL;
 
-    recover();
+    pcm_recover();
     return "ESS Extended mode not accepted, 16-bit not played\n";
 }
 

@@ -123,7 +123,7 @@ void wss_service() {
         outp(wss_base + WSS_STATUS, 0);
         outp(wss_base + WSS_INDEX, WSS_IFACE);
         outp(wss_base + WSS_DATA, wss_iface_idle);
-        irq_count++;
+        pcm_irq_count++;
     }
 }
 
@@ -148,15 +148,15 @@ void wss_unhook() {
 #define PROBE_FRAMES    16
 
 /* 64 bytes that don't cross a 64 KB page: one of the two halves */
-uint8_t __far probe_area[128];
+uint8_t __far wss_probe_area[128];
 
-void __far *probe_buffer() {
-    uint32_t phys = ((uint32_t)FP_SEG(probe_area) << 4) + FP_OFF(probe_area);
+void __far *wss_probe_buffer() {
+    uint32_t phys = ((uint32_t)FP_SEG(wss_probe_area) << 4) + FP_OFF(wss_probe_area);
 
     if ((phys >> 16) != ((phys + 63) >> 16))
-        return probe_area + 64;
+        return wss_probe_area + 64;
 
-    return probe_area;
+    return wss_probe_area;
 }
 
 /* The IRQ line the codec raises. Its configuration register leaves the
@@ -168,7 +168,7 @@ void __far *probe_buffer() {
  * Playing through the codec moves the OPL3-SAx out of its SB mode (see
  * SAX.C): a run probes only right before its 16-bit section */
 uint8_t wss_probe_irq(uint8_t dma) {
-    void __far *buffer = probe_buffer();
+    void __far *buffer = wss_probe_buffer();
     uint8_t  pin, iface;
     uint16_t before, during, after;
     uint32_t start;
@@ -221,7 +221,7 @@ void wss_print_info() {
         printf("IRQ %u", wss_irq);
     else
         printf("IRQ probed before 16-bit");
-    printf(", DMA %u%s\n", wss_dma, wss_cfg.mode == WSS_MANUAL ? " (/W)" : "");
+    printf(", DMA %u%s\n", wss_dma, env_wss_cfg.mode == WSS_MANUAL ? " (/W)" : "");
 }
 
 /* 16-bit signed stereo at 44100 Hz, DAC at 0 dB, IRQ on. 1 if the format reads back */

@@ -10,8 +10,8 @@
  * These are register offsets, not operator indices: the offset space
  * has gaps at 0x06-0x07 and 0x0E-0x0F.
  */
-uint8_t op_mod[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
-uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x14, 0x15 };
+uint8_t opl_op_mod[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
+uint8_t opl_op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x14, 0x15 };
 
 #define OPL_TEST_WSE_REG 0x01
 #define OPL_TEST_WSE_BIT 0x20
@@ -21,10 +21,10 @@ uint8_t op_car[9] = { 0x03, 0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x13, 0x14, 0x15 };
 /* Last Block/Fnum-high value written to 0xB0+ch, without the key-on
  * bit. Key-off rewrites this instead of 0x00, so the release tail
  * keeps playing at the note's pitch. */
-uint8_t b0_shadow[9];
+uint8_t opl_b0_shadow[9];
 
 /* OPL3 NEW mode output bits for 0xC0, per channel */
-uint8_t c0_pan[9];
+uint8_t opl_c0_pan[9];
 
 /* Carrier frequency multiplier, MULT register code (1 = x1) */
 void opl_set_carrier_mult(uint8_t channel, uint8_t mult)
@@ -32,7 +32,7 @@ void opl_set_carrier_mult(uint8_t channel, uint8_t mult)
     if (channel > 8)
         return;
 
-    opl_write((uint8_t)(0x20 + op_car[channel]), (uint8_t)(0x20 | (mult & 0x0F)));
+    opl_write((uint8_t)(0x20 + opl_op_car[channel]), (uint8_t)(0x20 | (mult & 0x0F)));
 }
 
 /* Above 63 the modulator is off.
@@ -43,11 +43,11 @@ void opl_set_mod_level(uint8_t channel, uint8_t level)
         return;
 
     if (level > 63) {
-        opl_write((uint8_t)(0x40 + op_mod[channel]), 0x3F);
-        opl_write((uint8_t)(0x60 + op_mod[channel]), 0x00);
+        opl_write((uint8_t)(0x40 + opl_op_mod[channel]), 0x3F);
+        opl_write((uint8_t)(0x60 + opl_op_mod[channel]), 0x00);
     } else {
-        opl_write((uint8_t)(0x40 + op_mod[channel]), level);
-        opl_write((uint8_t)(0x60 + op_mod[channel]), 0xF0);
+        opl_write((uint8_t)(0x40 + opl_op_mod[channel]), level);
+        opl_write((uint8_t)(0x60 + opl_op_mod[channel]), 0xF0);
     }
 }
 
@@ -58,7 +58,7 @@ void opl_set_feedback(uint8_t channel, uint8_t feedback)
         return;
 
     opl_write((uint8_t)(0xC0 + channel),
-              (uint8_t)(c0_pan[channel] | ((feedback & 0x07) << 1) | 0x01));
+              (uint8_t)(opl_c0_pan[channel] | ((feedback & 0x07) << 1) | 0x01));
 }
 
 void opl_set_car_level(uint8_t channel, uint8_t level)
@@ -66,7 +66,7 @@ void opl_set_car_level(uint8_t channel, uint8_t level)
     if (channel > 8)
         return;
 
-    opl_write((uint8_t)(0x40 + op_car[channel]), (uint8_t)(level & 0x3F));
+    opl_write((uint8_t)(0x40 + opl_op_car[channel]), (uint8_t)(level & 0x3F));
 }
 
 void opl_set_car_lfo(uint8_t channel, uint8_t lfo)
@@ -74,7 +74,7 @@ void opl_set_car_lfo(uint8_t channel, uint8_t lfo)
     if (channel > 8)
         return;
 
-    opl_write((uint8_t)(0x20 + op_car[channel]), (uint8_t)(0x21 | (lfo & 0xC0)));
+    opl_write((uint8_t)(0x20 + opl_op_car[channel]), (uint8_t)(0x21 | (lfo & 0xC0)));
 }
 
 void opl_set_lfo_depth(uint8_t depth)
@@ -87,7 +87,7 @@ void opl_set_car_wave(uint8_t channel, uint8_t wave)
     if (channel > 8)
         return;
 
-    opl_write((uint8_t)(0xE0 + op_car[channel]), (uint8_t)(wave & 0x07));
+    opl_write((uint8_t)(0xE0 + opl_op_car[channel]), (uint8_t)(wave & 0x07));
 }
 
 void opl_set_pan(uint8_t channel, uint8_t pan)
@@ -95,7 +95,7 @@ void opl_set_pan(uint8_t channel, uint8_t pan)
     if (channel > 8)
         return;
 
-    c0_pan[channel] = pan;
+    opl_c0_pan[channel] = pan;
 }
 
 
@@ -132,7 +132,7 @@ void opl_freq_to_block_fnum(unsigned freq_hz, uint8_t *block, uint16_t *fnum)
                         / OPL_BASE_HZ);
 }
 
-uint8_t make_b0(uint8_t block, uint16_t fnum)
+uint8_t opl_make_b0(uint8_t block, uint16_t fnum)
 {
     return (uint8_t)(((block & 0x07) << 2) | ((fnum >> 8) & 0x03));
 }
@@ -142,9 +142,9 @@ void opl_note_set(uint8_t channel, uint8_t block, uint16_t fnum)
     if (channel > 8)
         return;
 
-    b0_shadow[channel] = make_b0(block, fnum);
+    opl_b0_shadow[channel] = opl_make_b0(block, fnum);
     opl_write((uint8_t)(0xA0 + channel), (uint8_t)(fnum & 0xFF));
-    opl_write((uint8_t)(0xB0 + channel), b0_shadow[channel]);
+    opl_write((uint8_t)(0xB0 + channel), opl_b0_shadow[channel]);
 }
 
 void opl_key_on(uint8_t channel)
@@ -153,7 +153,7 @@ void opl_key_on(uint8_t channel)
         return;
 
     opl_write((uint8_t)(0xB0 + channel),
-              (uint8_t)(OPL_KEY_ON | b0_shadow[channel]));
+              (uint8_t)(OPL_KEY_ON | opl_b0_shadow[channel]));
 }
 
 void opl_note_on_raw(uint8_t channel, uint8_t block, uint16_t fnum)
@@ -161,10 +161,10 @@ void opl_note_on_raw(uint8_t channel, uint8_t block, uint16_t fnum)
     if (channel > 8)
         return;
 
-    b0_shadow[channel] = make_b0(block, fnum);
+    opl_b0_shadow[channel] = opl_make_b0(block, fnum);
     opl_write((uint8_t)(0xA0 + channel), (uint8_t)(fnum & 0xFF));
     opl_write((uint8_t)(0xB0 + channel),
-              (uint8_t)(OPL_KEY_ON | b0_shadow[channel]));
+              (uint8_t)(OPL_KEY_ON | opl_b0_shadow[channel]));
 }
 
 void opl_note_on(uint8_t channel, unsigned freq_hz)
@@ -181,7 +181,7 @@ void opl_note_off(uint8_t channel)
     if (channel > 8)
         return;
 
-    opl_write((uint8_t)(0xB0 + channel), b0_shadow[channel]);
+    opl_write((uint8_t)(0xB0 + channel), opl_b0_shadow[channel]);
 }
 
 void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
@@ -191,8 +191,8 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
     if (channel > 8)
         return;     /* only the 9 two-op channels are mapped above */
 
-    mod = op_mod[channel];
-    car = op_car[channel];
+    mod = opl_op_mod[channel];
+    car = opl_op_car[channel];
 
     /* Wave Select Enable */
     opl_write(OPL_TEST_WSE_REG, OPL_TEST_WSE_BIT);
@@ -213,7 +213,7 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
         opl_write((uint8_t)(0x60 + mod), 0xF0); /* attack=15, decay=0 */
         opl_write((uint8_t)(0x80 + mod), 0x0F);
         opl_write((uint8_t)(0xE0 + mod), 0x00);
-        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x00); /* FM, feedback=0 */
+        opl_write((uint8_t)(0xC0 + channel), opl_c0_pan[channel] | 0x00); /* FM, feedback=0 */
     } else if (instrument == OPL_INSTRUMENT_FEEDBACK) {
         /* Modulator at full level */
         opl_write((uint8_t)(0x40 + car), 0x3F);
@@ -225,7 +225,7 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
         opl_write((uint8_t)(0x60 + mod), 0xF0);
         opl_write((uint8_t)(0x80 + mod), 0x0F);
         opl_write((uint8_t)(0xE0 + mod), 0x00);
-        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x01); /* additive, feedback=0 */
+        opl_write((uint8_t)(0xC0 + channel), opl_c0_pan[channel] | 0x01); /* additive, feedback=0 */
     } else if (instrument == OPL_INSTRUMENT_SINE) {
         /* Release=15 (fastest) */
         opl_write((uint8_t)(0x80 + car), 0x0F); /* sustain level=0, release=15 */
@@ -236,7 +236,7 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
         opl_write((uint8_t)(0x60 + mod), 0x00); /* attack=0: never sounds */
         opl_write((uint8_t)(0x80 + mod), 0x0F);
         opl_write((uint8_t)(0xE0 + mod), 0x00);
-        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x00); /* FM, feedback=0 */
+        opl_write((uint8_t)(0xC0 + channel), opl_c0_pan[channel] | 0x00); /* FM, feedback=0 */
     } else {
         opl_write((uint8_t)(0x80 + car), 0x08); /* sustain level=0, release=8 */
 
@@ -246,6 +246,6 @@ void opl_set_instrument(uint8_t channel, opl_instrument_t instrument)
         opl_write((uint8_t)(0x60 + mod), 0xF4); /* attack=15, decay=4 */
         opl_write((uint8_t)(0x80 + mod), 0x48); /* sustain=4, release=8 */
         opl_write((uint8_t)(0xE0 + mod), 0x00);
-        opl_write((uint8_t)(0xC0 + channel), c0_pan[channel] | 0x06); /* FM, feedback=3 */
+        opl_write((uint8_t)(0xC0 + channel), opl_c0_pan[channel] | 0x06); /* FM, feedback=3 */
     }
 }

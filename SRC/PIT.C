@@ -14,23 +14,23 @@
 #define PIT_CH0_MODE3   0x36
 
 /* Time stamp counter in use, its PIT clocks per count and state */
-int      tsc_used;
-double   tsc_hz;
-double   tsc_to_pit;
-double   tsc_frac;
-uint32_t tsc_last;
+int      pit_tsc_used;
+double   pit_tsc_rate_hz;
+double   pit_tsc_to_pit;
+double   pit_tsc_frac;
+uint32_t pit_tsc_last;
 
-int      tb_started = 0;
-uint16_t tb_last;
-uint16_t tb_rem;
-uint32_t tb_clocks;
+int      pit_tb_started = 0;
+uint16_t pit_tb_last;
+uint16_t pit_tb_rem;
+uint32_t pit_tb_clocks;
 
 /* Windows' PIT: counting by one instead of two, or scaled to the BIOS ticks when neither fits */
-int      tb_by_one;
-double   tb_scale = 1.0;
-double   tb_sfrac;
-double   tb_per_tick;
-char    *tb_mode = "";
+int      pit_tb_by_one;
+double   pit_tb_scale = 1.0;
+double   pit_tb_sfrac;
+double   pit_tb_per_tick;
+char    *pit_tb_mode = "";
 
 #define PIT_CMD 0x43
 #define PIT_CH0 0x40
@@ -78,10 +78,10 @@ uint32_t tsc_read();
 
 /* CPUID is tried directly: the EFLAGS ID test can't be trusted in a Windows DOS box, its POPF is emulated.
  * Without CPUID (a 486) the invalid opcode comes back as INT 6 and the handler steps over it */
-volatile int ud_hit;
+volatile int pit_ud_hit;
 
-void __interrupt __far ud_handler(union INTPACK r) {
-    ud_hit = 1;
+void __interrupt __far pit_ud_handler(union INTPACK r) {
+    pit_ud_hit = 1;
     r.w.ip += 2;                    /* the 2-byte CPUID */
 }
 
@@ -92,7 +92,7 @@ void __interrupt __far ud_handler(union INTPACK r) {
 #define CAL_TICKS       36
 #define TICK_GUARD      100000000UL     /* reads before giving up */
 
-int bios_next_tick() {
+int pit_bios_next_tick() {
     uint32_t      tick = BDA_TICKS;
     unsigned long guard;
 
@@ -102,57 +102,57 @@ int bios_next_tick() {
     return 0;
 }
 
-char *tsc_failure = "not tried";
-char  tsc_text[48];
+char *pit_tsc_reason = "not tried";
+char  pit_tsc_reason_text[48];
 
 int pit_use_tsc() {
     void (__interrupt __far *old_ud)();
     uint32_t start;
     int      has, ticks;
 
-    ud_hit = 0;
+    pit_ud_hit = 0;
     old_ud = _dos_getvect(6);
-    _dos_setvect(6, ud_handler);
+    _dos_setvect(6, pit_ud_handler);
     has = cpu_has_tsc();
     _dos_setvect(6, old_ud);
-    if (ud_hit || !has) {
-        tsc_failure = ud_hit ? "no CPUID" : "CPUID says no time stamp counter";
+    if (pit_ud_hit || !has) {
+        pit_tsc_reason = pit_ud_hit ? "no CPUID" : "CPUID says no time stamp counter";
         return 0;
     }
 
     _enable();
-    if (!bios_next_tick()) {
-        tsc_failure = "BIOS ticks don't move";
+    if (!pit_bios_next_tick()) {
+        pit_tsc_reason = "BIOS ticks don't move";
         return 0;
     }
     start = tsc_read();
     for (ticks = 0; ticks < CAL_TICKS; ticks++)
-        if (!bios_next_tick()) {
-            tsc_failure = "BIOS ticks stopped";
+        if (!pit_bios_next_tick()) {
+            pit_tsc_reason = "BIOS ticks stopped";
             return 0;
         }
-    tsc_hz = (double)(uint32_t)(tsc_read() - start) * TICKS_PER_SEC / CAL_TICKS;
+    pit_tsc_rate_hz = (double)(uint32_t)(tsc_read() - start) * TICKS_PER_SEC / CAL_TICKS;
 
     /* Below a Pentium's, the count went wrong */
-    if (tsc_hz < 50000000.0) {
-        sprintf(tsc_text, "counter at %.2f MHz, too slow", tsc_hz / 1000000.0);
-        tsc_failure = tsc_text;
+    if (pit_tsc_rate_hz < 50000000.0) {
+        sprintf(pit_tsc_reason_text, "counter at %.2f MHz, too slow", pit_tsc_rate_hz / 1000000.0);
+        pit_tsc_reason = pit_tsc_reason_text;
         return 0;
     }
 
-    tsc_to_pit = PIT_HZ_F / tsc_hz;
-    tsc_frac   = 0;
-    tsc_last   = tsc_read();
-    tsc_used   = 1;
+    pit_tsc_to_pit = PIT_HZ_F / pit_tsc_rate_hz;
+    pit_tsc_frac   = 0;
+    pit_tsc_last   = tsc_read();
+    pit_tsc_used   = 1;
     return 1;
 }
 
 char *pit_tsc_failure() {
-    return tsc_failure;
+    return pit_tsc_reason;
 }
 
 double pit_tsc_hz() {
-    return tsc_used ? tsc_hz : 0;
+    return pit_tsc_used ? pit_tsc_rate_hz : 0;
 }
 
 uint32_t pit_now() {
@@ -161,51 +161,51 @@ uint32_t pit_now() {
     uint32_t units;
 
     /* Wraps every 2^32 counts, 4.3s at 1 GHz: always called sooner */
-    if (tsc_used) {
+    if (pit_tsc_used) {
         uint32_t now = tsc_read();
         uint32_t whole;
 
-        tsc_frac += (double)(uint32_t)(now - tsc_last) * tsc_to_pit;
-        tsc_last  = now;
-        whole     = (uint32_t)tsc_frac;
-        tsc_frac -= whole;
-        tb_clocks += whole;
-        return tb_clocks;
+        pit_tsc_frac += (double)(uint32_t)(now - pit_tsc_last) * pit_tsc_to_pit;
+        pit_tsc_last  = now;
+        whole     = (uint32_t)pit_tsc_frac;
+        pit_tsc_frac -= whole;
+        pit_tb_clocks += whole;
+        return pit_tb_clocks;
     }
 
     flags = irq_save();
 
     cur = pit_read();
-    if (!tb_started) {
-        tb_last    = cur;
-        tb_rem     = 0;
-        tb_started = 1;
+    if (!pit_tb_started) {
+        pit_tb_last    = cur;
+        pit_tb_rem     = 0;
+        pit_tb_started = 1;
     }
 
     /* counts down, 16-bit subtraction handles the wrap */
-    delta   = (uint16_t)(tb_last - cur);
-    tb_last = cur;
+    delta   = (uint16_t)(pit_tb_last - cur);
+    pit_tb_last = cur;
 
     /* mode 3 counts by 2, keep the odd remainder. Windows 3.x's by 1 */
-    if (tb_by_one)
-        tb_clocks += delta;
-    else if (tb_scale == 1.0) {
-        units      = (uint32_t)delta + tb_rem;
-        tb_rem     = (uint16_t)(units & 1u);
-        tb_clocks += units >> 1;
+    if (pit_tb_by_one)
+        pit_tb_clocks += delta;
+    else if (pit_tb_scale == 1.0) {
+        units      = (uint32_t)delta + pit_tb_rem;
+        pit_tb_rem     = (uint16_t)(units & 1u);
+        pit_tb_clocks += units >> 1;
     } else {
         uint32_t whole;
 
-        units      = (uint32_t)delta + tb_rem;
-        tb_rem     = (uint16_t)(units & 1u);
-        tb_sfrac  += (double)(units >> 1) * tb_scale;
-        whole      = (uint32_t)tb_sfrac;
-        tb_sfrac  -= whole;
-        tb_clocks += whole;
+        units      = (uint32_t)delta + pit_tb_rem;
+        pit_tb_rem     = (uint16_t)(units & 1u);
+        pit_tb_sfrac  += (double)(units >> 1) * pit_tb_scale;
+        whole      = (uint32_t)pit_tb_sfrac;
+        pit_tb_sfrac  -= whole;
+        pit_tb_clocks += whole;
     }
 
     irq_restore(flags);
-    return tb_clocks;
+    return pit_tb_clocks;
 }
 
 
@@ -217,9 +217,9 @@ void pit_init() {
     outp(PIT_CMD, PIT_CH0_MODE3);
     outp(PIT_CH0, 0x00);
     outp(PIT_CH0, 0x00);
-    tb_started = 0;
-    tb_scale   = 1.0;
-    tb_by_one  = 0;
+    pit_tb_started = 0;
+    pit_tb_scale   = 1.0;
+    pit_tb_by_one  = 0;
     irq_restore(flags);
 }
 
@@ -232,7 +232,7 @@ int pit_check_rate() {
     int      ticks;
 
     _enable();
-    if (!bios_next_tick())
+    if (!pit_bios_next_tick())
         return 0;
     start = pit_now();
     for (ticks = 0; ticks < CAL_TICKS; ticks++) {
@@ -247,28 +247,28 @@ int pit_check_rate() {
     }
     end = pit_now();
 
-    tb_per_tick = (double)(uint32_t)(end - start) / CAL_TICKS;
+    pit_tb_per_tick = (double)(uint32_t)(end - start) / CAL_TICKS;
     /* Not a counter that moves at a steady rate */
-    if (tb_per_tick < 6553.6 || tb_per_tick > 655360.0)
+    if (pit_tb_per_tick < 6553.6 || pit_tb_per_tick > 655360.0)
         return 0;
 
-    if (tb_per_tick > 65536.0 * 0.45 && tb_per_tick < 65536.0 * 0.55) {
-        tb_by_one = 1;
-        tb_mode   = "counts by one, read as such";
-    } else if (tb_per_tick > 65536.0 * 0.95 && tb_per_tick < 65536.0 * 1.05)
-        tb_mode   = "real rate";
+    if (pit_tb_per_tick > 65536.0 * 0.45 && pit_tb_per_tick < 65536.0 * 0.55) {
+        pit_tb_by_one = 1;
+        pit_tb_mode   = "counts by one, read as such";
+    } else if (pit_tb_per_tick > 65536.0 * 0.95 && pit_tb_per_tick < 65536.0 * 1.05)
+        pit_tb_mode   = "real rate";
     else {
-        tb_scale  = 65536.0 / tb_per_tick;
-        tb_sfrac  = 0;
-        tb_mode   = "scaled to 65536";
+        pit_tb_scale  = 65536.0 / pit_tb_per_tick;
+        pit_tb_sfrac  = 0;
+        pit_tb_mode   = "scaled to 65536";
     }
     return 1;
 }
 
 char *pit_rate_mode() {
-    return tb_mode;
+    return pit_tb_mode;
 }
 
 double pit_ticks_measured() {
-    return tb_per_tick;
+    return pit_tb_per_tick;
 }

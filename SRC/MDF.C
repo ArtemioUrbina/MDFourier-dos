@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include "mdf.h"
+#include "seq.h"
 #include "vsync.h"
-#include "kbd.h"
+#include "opltone.h"
 #include "sweep.h"
 #include "pcm.h"
 #include "host.h"
@@ -14,7 +15,12 @@
  *
  */
 
+/* The OPL channel the sequence plays on, and the next one for the
+ * right side on an OPL3 */
+#define FM_CHANNEL      0
+
 #define PULSE_COUNT     10
+#define SWEEP_FRAMES    20
 #define SILENCE_FRAMES  20
 #define DECAY_FRAMES    5
 #define CHIPID_FRAMES   60
@@ -35,47 +41,14 @@
 #define P16LEVEL_FRAMES 20
 #define P16SEP_FRAMES   20
 
-/* wmake QUICK=1 builds a short run with Sine and PCM only for testing */
-
-/* ESC pressed */
-int aborted;
-int bad_stop;
-int stereo;
-
-/* Frames the blocks are meant to play, each adds its own length.
- * Checked against the frames vsync actually counted */
-unsigned long seq_frames;
-
-int check_abort() {
-    if (!aborted && !host_is_windows() && vsync_first_bad()) {
-        aborted  = 1;
-        bad_stop = 1;
-    }
-    if (!aborted && kbd_poll_escape())
-        aborted = 1;
-    return aborted;
-}
-
-int next_frame() {
-    if (check_abort())
-        return 0;
-    /* Next PCM step, a chunk per frame */
-    pcm_fill_more();
-    vsync_wait();
-    return 1;
-}
-
-void silence(unsigned frames) {
-    seq_frames += frames;
-    while (frames-- && next_frame())
-        ;
-}
+/* OPL3: left and right on two channels */
+int mdf_stereo;
 
 /* Load the SINE instrument and the reference frequency
- * Call at least one frame before pulse_train()
+ * Call at least one frame before mdf_pulse_train()
  */
-void pulse_prepare(uint8_t channel) {
-    if (stereo)
+void mdf_pulse_prepare(uint8_t channel) {
+    if (mdf_stereo)
         opl_set_pan(channel, OPL_PAN_CENTER);
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
     opl_note_set(channel, REF_BLOCK, REF_FNUM);
@@ -102,27 +75,27 @@ void pulse_prepare(uint8_t channel) {
  * (/ 288 = 49715.9 Hz) so they might follow the PC, not the card.
  */
 
-void tone_hold(uint8_t channel, unsigned frames) {
-    if (aborted)
+void mdf_tone_hold(uint8_t channel, unsigned frames) {
+    if (seq_stopped())
         return;
 
-    seq_frames += frames;
+    seq_add_frames(frames);
     opl_key_on(channel);
-    while (frames-- && next_frame())
+    while (frames-- && seq_frame())
         ;
     opl_note_off(channel);
 }
 
-/* Must be entered right after a vsync_wait(), with pulse_prepare()
+/* Must be entered right after a vsync_wait(), with mdf_pulse_prepare()
  * already done.
  */
-void pulse_train(uint8_t channel) {
+void mdf_pulse_train(uint8_t channel) {
     int i;
 
-    if (aborted)
+    if (seq_stopped())
         return;
 
-    seq_frames += PULSE_COUNT * 2;
+    seq_add_frames(PULSE_COUNT * 2);
     for (i = 0; i < PULSE_COUNT; i++) {
         opl_key_on(channel);
         vsync_wait();
@@ -131,8 +104,8 @@ void pulse_train(uint8_t channel) {
     }
 }
 
-void sweep_prepare(uint8_t channel, opl_instrument_t instrument) {
-    if (stereo) {
+void mdf_sweep_prepare(uint8_t channel, opl_instrument_t instrument) {
+    if (mdf_stereo) {
         opl_set_pan(channel, OPL_PAN_LEFT);
         opl_set_pan(channel + 1, OPL_PAN_RIGHT);
         opl_set_instrument(channel + 1, instrument);
@@ -141,13 +114,13 @@ void sweep_prepare(uint8_t channel, opl_instrument_t instrument) {
 }
 
 /* Left and right start one write apart */
-void sweep_note_on(uint8_t channel, sweep_note_t *n, int set_mult) {
+void mdf_sweep_note_on(uint8_t channel, sweep_note_t *n, int set_mult) {
     if (set_mult) {
         opl_set_carrier_mult(channel, n->mult);
-        if (stereo)
+        if (mdf_stereo)
             opl_set_carrier_mult(channel + 1, n->mult);
     }
-    if (stereo) {
+    if (mdf_stereo) {
         opl_note_set(channel, n->block, n->fnum);
         opl_note_set(channel + 1, n->block, n->fnum);
         opl_key_on(channel);
@@ -156,58 +129,14 @@ void sweep_note_on(uint8_t channel, sweep_note_t *n, int set_mult) {
         opl_note_on_raw(channel, n->block, n->fnum);
 }
 
-void sweep_note_off(uint8_t channel) {
+void mdf_sweep_note_off(uint8_t channel) {
     opl_note_off(channel);
-    if (stereo)
+    if (mdf_stereo)
         opl_note_off(channel + 1);
 }
 
-/* A note already keyed on. Key-off at 80%, the rest is its release */
-void note_frames(uint8_t channel, unsigned frames) {
-    unsigned frame, release_frame;
-
-    seq_frames += frames;
-    release_frame = frames - frames / 5;
-    for (frame = 0; frame < frames; frame++) {
-        if (frame == release_frame)
-            sweep_note_off(channel);
-        if (!next_frame())
-            return;
-    }
-}
-
-void run_sweep(uint8_t channel, unsigned frames, sweep_note_t *notes, unsigned steps, int set_mult) {
-    unsigned step;
-
-    for (step = 0; step < steps && !aborted; step++) {
-        sweep_note_on(channel, &notes[step], set_mult);
-        note_frames(channel, frames);
-    }
-    sweep_note_off(channel);
-}
-
-#define COUNT(t) (sizeof(t) / sizeof(t[0]))
-
-/* Modulator levels for the FM depth block: off (pure sine) to full */
-uint8_t depth_level[] = { OPL_MOD_OFF, 48, 40, 32, 24, 16, 8, 0 };
-#define DEPTH_STEPS COUNT(depth_level)
-#define FEEDBACK_STEPS 8
-
-/* Carrier levels for the level staircase: 0 to -42 dB in 6 dB steps */
-uint8_t car_level[] = { 0, 8, 16, 24, 32, 40, 48, 56 };
-#define LEVEL_STEPS COUNT(car_level)
-
-/* Tremolo 1 and 4.8 dB, vibrato 7 and 14 cents */
-uint8_t tremolo_depth[] = { 0, OPL_DEPTH_AM_DEEP };
-uint8_t vibrato_depth[] = { 0, OPL_DEPTH_VIB_DEEP };
-
-#define TREMOLO_STEPS COUNT(tremolo_depth)
-#define VIBRATO_STEPS COUNT(vibrato_depth)
-
-/* Carrier waveforms 0-7, OPL2 plays 4-7 as 0-3 */
-#define WAVE_STEPS 8
-
 typedef enum {
+    STEPS_SWEEP,        /* the notes, one per step */
     STEPS_DEPTH,        /* FM_DEPTH instrument: modulator level */
     STEPS_FEEDBACK,     /* FEEDBACK instrument: feedback 0-7 */
     STEPS_LEVEL,        /* SINE instrument: carrier level */
@@ -216,16 +145,69 @@ typedef enum {
     STEPS_WAVE          /* SINE instrument: carrier waveform */
 } steps_t;
 
-void step_set(uint8_t channel, steps_t kind, unsigned step) {
+typedef struct {
+    uint8_t      channel;
+    steps_t      kind;
+    sweep_note_t *notes;        /* STEPS_SWEEP */
+    int          set_mult;      /* STEPS_SWEEP: the sine sweep's carrier multiple */
+} fm_block_t;
+
+/* A note already keyed on. Key-off at 80%, the rest is its release */
+void mdf_fm_step_off(void *context, int step) {
+    fm_block_t *block = (fm_block_t *)context;
+
+    (void)step;
+    mdf_sweep_note_off(block->channel);
+}
+
+void mdf_fm_sweep_on(void *context, int step) {
+    fm_block_t *block = (fm_block_t *)context;
+
+    mdf_sweep_note_on(block->channel, &block->notes[step], block->set_mult);
+}
+
+void mdf_run_sweep(uint8_t channel, unsigned frames, sweep_note_t *notes, unsigned steps, int set_mult) {
+    fm_block_t block;
+
+    block.channel  = channel;
+    block.kind     = STEPS_SWEEP;
+    block.notes    = notes;
+    block.set_mult = set_mult;
+    seq_block((int)steps, frames, NULL, mdf_fm_sweep_on, mdf_fm_step_off, &block);
+    mdf_sweep_note_off(channel);
+}
+
+#define COUNT(t) (sizeof(t) / sizeof(t[0]))
+
+/* Modulator levels for the FM depth block: off (pure sine) to full */
+uint8_t mdf_depth_level[] = { OPL_MOD_OFF, 48, 40, 32, 24, 16, 8, 0 };
+#define DEPTH_STEPS COUNT(mdf_depth_level)
+#define FEEDBACK_STEPS 8
+
+/* Carrier levels for the level staircase: 0 to -42 dB in 6 dB steps */
+uint8_t mdf_car_level[] = { 0, 8, 16, 24, 32, 40, 48, 56 };
+#define LEVEL_STEPS COUNT(mdf_car_level)
+
+/* Tremolo 1 and 4.8 dB, vibrato 7 and 14 cents */
+uint8_t mdf_tremolo_depth[] = { 0, OPL_DEPTH_AM_DEEP };
+uint8_t mdf_vibrato_depth[] = { 0, OPL_DEPTH_VIB_DEEP };
+
+#define TREMOLO_STEPS COUNT(mdf_tremolo_depth)
+#define VIBRATO_STEPS COUNT(mdf_vibrato_depth)
+
+/* Carrier waveforms 0-7, OPL2 plays 4-7 as 0-3 */
+#define WAVE_STEPS 8
+
+void mdf_step_set(uint8_t channel, steps_t kind, unsigned step) {
     switch (kind) {
         case STEPS_DEPTH:
-            opl_set_mod_level(channel, depth_level[step]);
+            opl_set_mod_level(channel, mdf_depth_level[step]);
             break;
         case STEPS_FEEDBACK:
             opl_set_feedback(channel, (uint8_t)step);
             break;
         case STEPS_LEVEL:
-            opl_set_car_level(channel, car_level[step]);
+            opl_set_car_level(channel, mdf_car_level[step]);
             break;
         case STEPS_TREMOLO:
             opl_set_car_lfo(channel, OPL_LFO_AM);
@@ -236,6 +218,8 @@ void step_set(uint8_t channel, steps_t kind, unsigned step) {
         case STEPS_WAVE:
             opl_set_car_wave(channel, (uint8_t)step);
             break;
+        case STEPS_SWEEP:
+            break;
     }
 }
 
@@ -243,23 +227,31 @@ void step_set(uint8_t channel, steps_t kind, unsigned step) {
  * each key-on: modulator level, feedback, carrier level, tremolo,
  * vibrato or carrier waveform.
  * Must be entered right after a vsync_wait(), instrument loaded */
-void run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
-    sweep_note_t tone = { TONE_BLOCK, TONE_FNUM, 1 };
-    unsigned step;
+sweep_note_t mdf_fm_tone = { TONE_BLOCK, TONE_FNUM, 1 };
 
-    for (step = 0; step < steps && !aborted; step++) {
-        /* Global, shared by both channels */
-        if (kind == STEPS_TREMOLO)
-            opl_set_lfo_depth(tremolo_depth[step]);
-        else if (kind == STEPS_VIBRATO)
-            opl_set_lfo_depth(vibrato_depth[step]);
-        step_set(channel, kind, step);
-        if (stereo)
-            step_set(channel + 1, kind, step);
-        sweep_note_on(channel, &tone, 0);
-        note_frames(channel, frames);
-    }
-    sweep_note_off(channel);
+void mdf_fm_steps_on(void *context, int step) {
+    fm_block_t *block = (fm_block_t *)context;
+
+    /* Global, shared by both channels */
+    if (block->kind == STEPS_TREMOLO)
+        opl_set_lfo_depth(mdf_tremolo_depth[step]);
+    else if (block->kind == STEPS_VIBRATO)
+        opl_set_lfo_depth(mdf_vibrato_depth[step]);
+    mdf_step_set(block->channel, block->kind, (unsigned)step);
+    if (mdf_stereo)
+        mdf_step_set(block->channel + 1, block->kind, (unsigned)step);
+    mdf_sweep_note_on(block->channel, &mdf_fm_tone, 0);
+}
+
+void mdf_run_steps(uint8_t channel, steps_t kind, unsigned steps, unsigned frames) {
+    fm_block_t block;
+
+    block.channel  = channel;
+    block.kind     = kind;
+    block.notes    = NULL;
+    block.set_mult = 0;
+    seq_block((int)steps, frames, NULL, mdf_fm_steps_on, mdf_fm_step_off, &block);
+    mdf_sweep_note_off(channel);
     if (kind == STEPS_TREMOLO || kind == STEPS_VIBRATO)
         opl_set_lfo_depth(0);
 }
@@ -278,13 +270,13 @@ typedef enum {
     PREP_PCM_CLOCK      /* PCM rate and DMA for the clock tone */
 } prep_t;
 
-void gap(uint8_t channel, unsigned frames, prep_t prep) {
-    silence(frames - 1);
-    if (aborted)
+void mdf_gap(uint8_t channel, unsigned frames, prep_t prep) {
+    seq_silence(frames - 1);
+    if (seq_stopped()) 
         prep = PREP_NONE;
     switch (prep) {
         case PREP_PULSES:
-            pulse_prepare(channel);
+            mdf_pulse_prepare(channel);
             break;
         /* Under Windows id with 1500 and 2500 Hz */
         case PREP_WM_OK:
@@ -300,16 +292,16 @@ void gap(uint8_t channel, unsigned frames, prep_t prep) {
                 opl_note_set(channel, WM_BAD_BLOCK, WM_BAD_FNUM);
             break;
         case PREP_FM:
-            sweep_prepare(channel, OPL_INSTRUMENT_DEFAULT);
+            mdf_sweep_prepare(channel, OPL_INSTRUMENT_DEFAULT);
             break;
         case PREP_SINE:
-            sweep_prepare(channel, OPL_INSTRUMENT_SINE);
+            mdf_sweep_prepare(channel, OPL_INSTRUMENT_SINE);
             break;
         case PREP_DEPTH:
-            sweep_prepare(channel, OPL_INSTRUMENT_FM_DEPTH);
+            mdf_sweep_prepare(channel, OPL_INSTRUMENT_FM_DEPTH);
             break;
         case PREP_FEEDBACK:
-            sweep_prepare(channel, OPL_INSTRUMENT_FEEDBACK);
+            mdf_sweep_prepare(channel, OPL_INSTRUMENT_FEEDBACK);
             break;
         case PREP_PCM_CLOCK:
             pcm_clock_arm(PCMCLK_FRAMES);
@@ -317,31 +309,31 @@ void gap(uint8_t channel, unsigned frames, prep_t prep) {
         case PREP_NONE:
             break;
     }
-    silence(1);
+    seq_silence(1);
 }
 
 /* One transfer, DMA loops the buffer */
-void pcm_clock_block(unsigned frames) {
-    if (aborted)
+void mdf_pcm_clock_block(unsigned frames) {
+    if (seq_stopped())
         return;
 
-    seq_frames += frames;
+    seq_add_frames(frames);
     pcm_clock_start();
-    while (frames-- && next_frame())
+    while (frames-- && seq_frame())
         ;
     pcm_clock_stop();
 }
 
-void pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
+void mdf_pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
     unsigned step, frame;
 
-    for (step = 0; step < steps && !aborted; step++) {
-        seq_frames += frames;
+    for (step = 0; step < steps && !seq_stopped(); step++) {
+        seq_add_frames(frames);
         pcm_step_start(kind, step & 1);
         if (step + 1 < steps)
-            pcm_step_fill(kind, step + 1, (step + 1) & 1, frames);	
+            pcm_step_fill(kind, step + 1, (step + 1) & 1, frames);
         for (frame = 0; frame < frames; frame++)
-            if (!next_frame())
+            if (!seq_frame())
                 break;
     }
     pcm_steps_end(kind);
@@ -354,8 +346,8 @@ void pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
 #define FILLER_LEVEL    20      /* carrier attenuation, 0.75 dB steps: -15 dB */
 #define FILLER_DECAY    10
 
-void filler_on(uint8_t channel) {
-    if (stereo)
+void mdf_filler_on(uint8_t channel) {
+    if (mdf_stereo)
         opl_set_pan(channel, OPL_PAN_CENTER);
         
     opl_set_instrument(channel, OPL_INSTRUMENT_SINE);
@@ -363,15 +355,15 @@ void filler_on(uint8_t channel) {
     opl_note_on(channel, FILLER_HZ);
 }
 
-void pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned frames, int next_kind) {
+void mdf_pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned frames, int next_kind) {
     unsigned step, frame;
     int      filler = !pcmx_enabled(kind) && kind != PCMX_CLK8 && kind != PCMX_CLK16;
 
-    if (filler && !aborted)
-        filler_on(channel);
+    if (filler && !seq_stopped())
+        mdf_filler_on(channel);
 
-    for (step = 0; step < steps && !aborted; step++) {
-        seq_frames += frames;
+    for (step = 0; step < steps && !seq_stopped(); step++) {
+        seq_add_frames(frames);
         pcmx_step_start(kind);
         if (step + 1 < steps)
             pcmx_step_fill(kind, step + 1);
@@ -380,7 +372,7 @@ void pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned fram
         for (frame = 0; frame < frames; frame++) {
             if (filler && step + 1 == steps && frame + FILLER_DECAY == frames)
                 opl_note_off(channel);
-            if (!next_frame())
+            if (!seq_frame())
                 break;
         }
     }
@@ -390,134 +382,113 @@ void pcmx_steps(uint8_t channel, pcmx_kind_t kind, unsigned steps, unsigned fram
         pcmx_steps_end(kind);
 }
 
-int end_sequence(uint8_t channel) {
-    vsync_stats_t stats;
-    unsigned long total_frames = seq_frames;
+int mdf_end_sequence(uint8_t channel) {
+    int result;
 
-    vsync_end(&stats);
-    sweep_note_off(channel);
+    seq_stop();
+    mdf_sweep_note_off(channel);
     pcm_finish();
 
-    if (bad_stop) {
-        printf("\nStopped at frame %lu, it ran late: this CPU is too slow.\n"
-               "  MDF needs a 486SX with its internal cache enabled, in an\n"
-               "  emulator raise the cycles. Discard this capture\n", vsync_first_bad());
-        return MDF_BAD_FRAMES;
-    }
-    if (aborted) {
-        printf("\nAborted\n");
-        total_frames = stats.frames;
-    } else
-        printf("\nSequence complete: %lu frames\n", total_frames);
-
-    vsync_print_stats(&stats, total_frames);
-    pcm_print_report();
-    if (aborted)
-        return MDF_ABORTED;
-    return stats.bad ? MDF_BAD_FRAMES : MDF_OK;
+    result = seq_report();
+    if (!seq_stopped_late())
+        pcm_print_report();
+    return result;
 }
 
-int mdf_run_full_test(uint8_t channel, unsigned frames, int use_stereo, int mixer_ok) {
-    stereo     = use_stereo;
-    aborted    = 0;
-    bad_stop   = 0;
-    seq_frames = 0;
+int mdf_run_full_test(int use_stereo, int mixer_ok) {
+    uint8_t channel = FM_CHANNEL;
 
-    pulse_prepare(channel);
+    mdf_stereo = use_stereo;
+    mdf_pulse_prepare(channel);
 
-    kbd_poll_escape();
-    printf("Press ESC to abort\n");
-
-    vsync_set_tolerant(host_is_windows());
-
-    /* Align the first key-on to a frame edge */
-    vsync_begin();
+    /* Next PCM step, a chunk per frame */
+    seq_begin(pcm_fill_more);
 
     /* MDF Sequence */
 
     /* Sync */
-    pulse_train(channel);                                       
+    mdf_pulse_train(channel);                                       
 
     /* CHIPID */
-    gap(channel, SILENCE_FRAMES, PREP_NONE);
-    tone_hold(channel, CHIPID_FRAMES);                          
+    mdf_gap(channel, SILENCE_FRAMES, PREP_NONE);
+    mdf_tone_hold(channel, CHIPID_FRAMES);                          
 
     /* MIXER */
-    gap(channel, SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
-    tone_hold(channel, WM_FRAMES);                              
+    mdf_gap(channel, SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
+    mdf_tone_hold(channel, WM_FRAMES);                              
 
     /* FM */
-    gap(channel, SILENCE_FRAMES, PREP_FM);
-    run_sweep(channel, frames, sweep, SWEEP_STEPS, 0);          
-    silence(DECAY_FRAMES);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_FM);
+    mdf_run_sweep(channel, SWEEP_FRAMES, sweep, SWEEP_STEPS, 0);
+    seq_silence(DECAY_FRAMES);
 
     /* SINE */
-    gap(channel, SILENCE_FRAMES, PREP_SINE);
-    run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
-    silence(DECAY_FRAMES);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_SINE);
+    mdf_run_sweep(channel, SINE_FRAMES, sine_sweep, SINE_STEPS, 1);
+    seq_silence(DECAY_FRAMES);
 
     /* DEPTH */
-    gap(channel, SILENCE_FRAMES, PREP_DEPTH);
-    run_steps(channel, STEPS_DEPTH, DEPTH_STEPS, STEP_FRAMES);         
+    mdf_gap(channel, SILENCE_FRAMES, PREP_DEPTH);
+    mdf_run_steps(channel, STEPS_DEPTH, DEPTH_STEPS, STEP_FRAMES);         
 
     /* FEEDBACK, FEEDBACK7 */
-    gap(channel, SILENCE_FRAMES, PREP_FEEDBACK);
-    run_steps(channel, STEPS_FEEDBACK, FEEDBACK_STEPS, STEP_FRAMES);   
+    mdf_gap(channel, SILENCE_FRAMES, PREP_FEEDBACK);
+    mdf_run_steps(channel, STEPS_FEEDBACK, FEEDBACK_STEPS, STEP_FRAMES);   
 
     /* LEVEL */
-    gap(channel, SILENCE_FRAMES, PREP_SINE);
-    run_steps(channel, STEPS_LEVEL, LEVEL_STEPS, STEP_FRAMES);         
+    mdf_gap(channel, SILENCE_FRAMES, PREP_SINE);
+    mdf_run_steps(channel, STEPS_LEVEL, LEVEL_STEPS, STEP_FRAMES);         
 
     /* TREMOLO & VIBRATO with SINE instrument */
-    gap(channel, SILENCE_FRAMES, PREP_SINE);
-    run_steps(channel, STEPS_TREMOLO, TREMOLO_STEPS, TREMOLO_FRAMES);
-    run_steps(channel, STEPS_VIBRATO, VIBRATO_STEPS, VIBRATO_FRAMES);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_SINE);
+    mdf_run_steps(channel, STEPS_TREMOLO, TREMOLO_STEPS, TREMOLO_FRAMES);
+    mdf_run_steps(channel, STEPS_VIBRATO, VIBRATO_STEPS, VIBRATO_FRAMES);
 
     /* WAVE */
-    gap(channel, SILENCE_FRAMES, PREP_SINE);
-    run_steps(channel, STEPS_WAVE, WAVE_STEPS, STEP_FRAMES);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_SINE);
+    mdf_run_steps(channel, STEPS_WAVE, WAVE_STEPS, STEP_FRAMES);
 
     /* PCM, 8-bit mono */
-    if (!aborted)
+    if (!seq_stopped())
         pcm_prepare();
 
     /* PCMCLK: rate / 8 */
-    gap(channel, SILENCE_FRAMES, PREP_PCM_CLOCK);
-    pcm_clock_block(PCMCLK_FRAMES);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_PCM_CLOCK);
+    mdf_pcm_clock_block(PCMCLK_FRAMES);
 
     /* PCMIDLE: speaker on, nothing playing */
     pcm_step_fill(PCM_SWEEP, 0, 0, PCMSINE_FRAMES);
-    silence(PCMIDLE_FRAMES);
+    seq_silence(PCMIDLE_FRAMES);
 
     /* PCMSINE */
-    pcm_steps(PCM_SWEEP, PCM_SWEEP_STEPS, PCMSINE_FRAMES);
+    mdf_pcm_steps(PCM_SWEEP, PCM_SWEEP_STEPS, PCMSINE_FRAMES);
 
     /* PCMLEVEL */
     pcm_step_fill(PCM_LEVEL, 0, 0, PCMLEVEL_FRAMES);
-    gap(channel, SILENCE_FRAMES, PREP_NONE);
-    pcm_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_NONE);
+    mdf_pcm_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
 
     /* PCM 8-bit stereo: DSP 3.xx and 4.xx, filler on older cards */
-    if (!aborted)
+    if (!seq_stopped())
         pcmx_begin();
-    gap(channel, SILENCE_FRAMES, PREP_NONE);
-    pcmx_steps(channel, PCMX_CLK8, 1, PSCLK_FRAMES, PCMX_SEP8);
-    pcmx_steps(channel, PCMX_SEP8, PCMX_SEP_STEPS, PSSEP_FRAMES, -1);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_NONE);
+    mdf_pcmx_steps(channel, PCMX_CLK8, 1, PSCLK_FRAMES, PCMX_SEP8);
+    mdf_pcmx_steps(channel, PCMX_SEP8, PCMX_SEP_STEPS, PSSEP_FRAMES, -1);
 
     /* PCM 16-bit stereo: DSP 4.xx with BLASTER H and ESS Extended mode, filler elsewhere */
-    if (!aborted)
+    if (!seq_stopped())
         pcmx_begin16();
-    gap(channel, SILENCE_FRAMES, PREP_NONE);
-    pcmx_steps(channel, PCMX_CLK16, 1, P16CLK_FRAMES, PCMX_SWEEP16);
-    pcmx_steps(channel, PCMX_SWEEP16, PCMX_SWEEP_STEPS, P16SINE_FRAMES, -1);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_NONE);
+    mdf_pcmx_steps(channel, PCMX_CLK16, 1, P16CLK_FRAMES, PCMX_SWEEP16);
+    mdf_pcmx_steps(channel, PCMX_SWEEP16, PCMX_SWEEP_STEPS, P16SINE_FRAMES, -1);
     pcmx_step_fill(PCMX_LEVEL16, 0);
-    gap(channel, SILENCE_FRAMES, PREP_NONE);
-    pcmx_steps(channel, PCMX_LEVEL16, PCMX_LEVEL_STEPS, P16LEVEL_FRAMES, PCMX_SEP16);
-    pcmx_steps(channel, PCMX_SEP16, PCMX_SEP_STEPS, P16SEP_FRAMES, -1);
+    mdf_gap(channel, SILENCE_FRAMES, PREP_NONE);
+    mdf_pcmx_steps(channel, PCMX_LEVEL16, PCMX_LEVEL_STEPS, P16LEVEL_FRAMES, PCMX_SEP16);
+    mdf_pcmx_steps(channel, PCMX_SEP16, PCMX_SEP_STEPS, P16SEP_FRAMES, -1);
 
     /* Sync */
-    gap(channel, SILENCE_FRAMES, PREP_PULSES);
-    pulse_train(channel);                                       
+    mdf_gap(channel, SILENCE_FRAMES, PREP_PULSES);
+    mdf_pulse_train(channel);                                       
 
-    return end_sequence(channel);
+    return mdf_end_sequence(channel);
 }

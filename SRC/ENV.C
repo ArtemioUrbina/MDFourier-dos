@@ -5,9 +5,9 @@
 #include "env.h"
 
 int verbose = 0;
-wss_cfg_t wss_cfg;
+wss_cfg_t env_wss_cfg;
 
-int parse_number(char *str, uint8_t base) {
+int env_parse_number(char *str, uint8_t base) {
     uint8_t  digit = 0;
     uint16_t value = 0;
     int digits = 0;
@@ -54,22 +54,22 @@ int env_get_blaster(blaster_cfg_t *cfg) {
         if(*blaster) {
             switch(toupper((unsigned char)*blaster)) {
                 case 'A':
-                    cfg->port = parse_number(blaster + 1, 16);
+                    cfg->port = env_parse_number(blaster + 1, 16);
                     break;
                 case 'I':
-                    cfg->irq = parse_number(blaster + 1, 10);
+                    cfg->irq = env_parse_number(blaster + 1, 10);
                     break;
                 case 'D':
-                    cfg->dma = parse_number(blaster + 1, 10);
+                    cfg->dma = env_parse_number(blaster + 1, 10);
                     break;
                 case 'H':
-                    cfg->high_dma = parse_number(blaster + 1, 10);
+                    cfg->high_dma = env_parse_number(blaster + 1, 10);
                     break;
                 case 'P':
-                    cfg->mpu_port = parse_number(blaster + 1, 16);
+                    cfg->mpu_port = env_parse_number(blaster + 1, 16);
                     break;
                 case 'T':
-                    cfg->type = parse_number(blaster + 1, 10);
+                    cfg->type = env_parse_number(blaster + 1, 10);
                     break;
                 default:
                     // skip unknown characters
@@ -86,7 +86,7 @@ int env_get_blaster(blaster_cfg_t *cfg) {
     return 1;
 }
 
-void print_env(blaster_cfg_t *cfg) {
+void env_print(blaster_cfg_t *cfg) {
     printf(" BLASTER: ");
     if(cfg->port != -1)
         printf("port=0x%03X ", cfg->port);
@@ -113,34 +113,34 @@ int env_parse_wss(char *arg) {
     word[i] = 0;
 
     if (!strcmp(word, "AUTO") && !arg[i]) {
-        wss_cfg.mode = WSS_AUTO;
+        env_wss_cfg.mode = WSS_AUTO;
         return 1;
     }
     if (!strcmp(word, "OFF") && !arg[i]) {
-        wss_cfg.mode = WSS_OFF;
+        env_wss_cfg.mode = WSS_OFF;
         return 1;
     }
-    /* parse_number stops at the comma, -1 without a digit */
-    port = parse_number((char *)arg, 16);
+    /* env_parse_number stops at the comma, -1 without a digit */
+    port = env_parse_number((char *)arg, 16);
     while (*arg && *arg != ',')
         arg++;
     if (*arg++ != ',')
         return 0;
-    wss_cfg.irq = parse_number((char *)arg, 10);
+    env_wss_cfg.irq = env_parse_number((char *)arg, 10);
     while (*arg && *arg != ',')
         arg++;
     if (*arg++ != ',')
         return 0;
-    wss_cfg.dma = parse_number((char *)arg, 10);
+    env_wss_cfg.dma = env_parse_number((char *)arg, 10);
     while (*arg >= '0' && *arg <= '9')
         arg++;
 
-    if (port <= 0 || *arg || wss_cfg.irq < 2 || wss_cfg.irq > 15 ||
-        wss_cfg.dma < 0 || wss_cfg.dma > 3 || wss_cfg.dma == 2)
+    if (port <= 0 || *arg || env_wss_cfg.irq < 2 || env_wss_cfg.irq > 15 ||
+        env_wss_cfg.dma < 0 || env_wss_cfg.dma > 3 || env_wss_cfg.dma == 2)
         return 0;
-    wss_cfg.port = (unsigned)port;
-    if (wss_cfg.irq == 2)
-        wss_cfg.irq = 9;
-    wss_cfg.mode = WSS_MANUAL;
+    env_wss_cfg.port = (unsigned)port;
+    if (env_wss_cfg.irq == 2)
+        env_wss_cfg.irq = 9;
+    env_wss_cfg.mode = WSS_MANUAL;
     return 1;
 }

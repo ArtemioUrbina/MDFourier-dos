@@ -27,7 +27,7 @@ typedef struct {
     int      irq, dma;
 } wss_cfg_t;
 
-extern wss_cfg_t wss_cfg;
+extern wss_cfg_t env_wss_cfg;
 
 /* 1 if the /W: text is valid */
 int env_parse_wss(char *arg);
@@ -36,6 +36,6 @@ int env_parse_wss(char *arg);
 extern int verbose;
 
 int env_get_blaster(blaster_cfg_t *cfg);
-void print_env(blaster_cfg_t *cfg);
+void env_print(blaster_cfg_t *cfg);
 
 #endif
