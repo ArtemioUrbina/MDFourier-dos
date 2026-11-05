@@ -31,31 +31,7 @@
 #define EXIT_WSS        7   /* WSS codec found, /W needed */
 #define EXIT_BAD_IRQ    8   /* the DSP raises another IRQ than BLASTER I */
 
-/* /T: 30 s of frames, no sound, to see how the timing holds. Under
- * Windows tolerant as the sequence would run */
-#define TIMING_SECONDS  30
-
-int timing_test(double hz) {
-    vsync_stats_t stats;
-    unsigned long frames = (unsigned long)(hz * TIMING_SECONDS), frame;
-
-    printf(" Timing: %.4f Hz (%.4f ms per frame), %lu frames, ESC stops\n",
-           hz, 1000.0 / hz, frames);
-    kbd_poll_escape();
-    vsync_set_tolerant(host_is_windows());
-    vsync_begin();
-    for (frame = 0; frame < frames; frame++) {
-        if (kbd_poll_escape())
-            break;
-        vsync_wait();
-    }
-    vsync_end(&stats);
-    vsync_print_stats(&stats, frame);
-    /* The DOS sequence would have stopped at the first one */
-    if (stats.bad && !host_is_windows())
-        printf("  first bad frame: %lu\n", vsync_first_bad());
-    return stats.bad ? EXIT_BAD_FRAMES : EXIT_OK;
-}
+int timing_test(double hz);
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
@@ -105,7 +81,6 @@ int main(int argc, char *argv[]) {
         return EXIT_USAGE;
     }
 
-    /* The mixer report is all /R is for */
     if (report_only)
         verbose = 1;
 
@@ -281,4 +256,30 @@ int main(int argc, char *argv[]) {
     if (result == SEQ_BAD_FRAMES)
         return EXIT_BAD_FRAMES;
     return EXIT_OK;
+}
+
+/* /T: 30 s of frames, no sound, to see how the timing holds. Under
+ * Windows tolerant as the sequence would run */
+#define TIMING_SECONDS  30
+
+int timing_test(double hz) {
+    vsync_stats_t stats;
+    unsigned long frames = (unsigned long)(hz * TIMING_SECONDS), frame;
+
+    printf(" Timing: %.4f Hz (%.4f ms per frame), %lu frames, ESC stops\n",
+           hz, 1000.0 / hz, frames);
+    kbd_poll_escape();
+    vsync_set_tolerant(host_is_windows());
+    vsync_begin();
+    for (frame = 0; frame < frames; frame++) {
+        if (kbd_poll_escape())
+            break;
+        vsync_wait();
+    }
+    vsync_end(&stats);
+    vsync_print_stats(&stats, frame);
+    /* The DOS sequence would have stopped at the first one */
+    if (stats.bad && !host_is_windows())
+        printf("  first bad frame: %lu\n", vsync_first_bad());
+    return stats.bad ? EXIT_BAD_FRAMES : EXIT_OK;
 }

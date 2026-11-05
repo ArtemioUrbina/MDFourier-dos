@@ -3,8 +3,8 @@
  *
  * DSP 3.01 in compatibility mode only plays 16-bit stereo to 11 kHz.
  * Extended mode plays it to 48 kHz on the same 8-bit DMA channel, the
- * FIFO gets bytes: low, high, left channel and right chammeñ
- * data sheet says
+ * FIFO gets bytes: low, high, left channel, then the right one as
+ * the data sheet says
  *
  * Its registers are written as command, value (0xA1 then the divider)
  * and read with 0xC0, register. The mono and 8-bit stereo blocks stay

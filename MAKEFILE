@@ -12,11 +12,11 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\seq.h &
+       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\seq.h include\fmblk.h include\pcmblk.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\seq.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
@@ -48,6 +48,12 @@ build\main.obj: src\main.c $(HDRS)
 
 build\seq.obj: src\seq.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\seq.c
+
+build\fmblk.obj: src\fmblk.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\fmblk.c
+
+build\pcmblk.obj: src\pcmblk.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\pcmblk.c
 
 build\dsp.obj: src\dsp.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\dsp.c

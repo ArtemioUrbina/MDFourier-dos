@@ -206,14 +206,14 @@ int mixer_report_sb16(uint16_t base) {
 
     /* The levels only when asked or when something is off */
     if (verbose || warn) {
-        printf(" Mixer: SB16, master %d/%d dB, FM %d/%d dB, voice %d/%d dB, gain x%d/x%d\n",
+        printf(" Mixer: SB16 master %d/%d dB FM %d/%d dB voice %d/%d dB gain x%d/x%d\n",
                mixer_sb16_db(mstl), mixer_sb16_db(mstr), mixer_sb16_db(fml), mixer_sb16_db(fmr),
                mixer_sb16_db(vol), mixer_sb16_db(vor), 1 << gl, 1 << gr);
         if (has_tone)
-            printf("        treble %u/%u, bass %u/%u (7 or 8 = flat), PC speaker %d dB\n",
+            printf("        treble %u/%u bass %u/%u (7 or 8 = flat) PC speaker %d dB\n",
                    tl, tr, bl, br, 6 * pcspk - 18);
         else
-            printf("        no treble/bass (SB16 emulation), PC speaker %d dB\n",
+            printf("        no treble/bass (SB16 emulation) PC speaker %d dB\n",
                    6 * pcspk - 18);
         printf("        to output:%s%s%s%s\n",
                (outsw & 0x06) ? " CD" : "", (outsw & 0x18) ? " line" : "",
@@ -259,10 +259,10 @@ int mixer_report_sbpro(uint16_t base) {
     warn  = low || other;
 
     if (verbose || warn) {
-        printf(" Mixer: SB Pro, master %u/%u, FM %u/%u, voice %u/%u (7 = 0 dB)\n",
+        printf(" Mixer: SB Pro master %u/%u FM %u/%u voice %u/%u (7 = 0 dB)\n",
                mst >> 5, (mst >> 1) & 7, fm >> 5, (fm >> 1) & 7,
                voice >> 5, (voice >> 1) & 7);
-        printf("        CD %u/%u, line %u/%u (0 = -46 dB), mic %u/3\n",
+        printf("        CD %u/%u line %u/%u (0 = -46 dB) mic %u/3\n",
                cd >> 5, (cd >> 1) & 7, line >> 5, (line >> 1) & 7, mic);
     }
 
@@ -301,10 +301,10 @@ int mixer_report_ess(uint16_t base) {
     warn  = low || fm != 0x88 || voice != 0xEE || d3 || other;
 
     if (verbose || warn) {
-        printf(" Mixer: ESS, master %u/%u%s (63 = max), FM %u/%u (8 = 0 dB), voice %u/%u (14 = 0 dB)%s\n",
+        printf(" Mixer: ESS master %u/%u%s (63 = max) FM %u/%u (8 = 0 dB) voice %u/%u (14 = 0 dB)%s\n",
                mstl & 0x3F, mstr & 0x3F, ((mstl | mstr) & 0x40) ? " muted" : "",
                fm >> 4, fm & 0x0F, voice >> 4, voice & 0x0F, d3 ? ", 3-D on" : "");
-        printf("        CD %u/%u, line %u/%u, mic %u/%u, aux %u/%u, mono in %u/%u, PC speaker %u\n",
+        printf("        CD %u/%u line %u/%u mic %u/%u aux %u/%u mono in %u/%u PC speaker %u\n",
                cd >> 4, cd & 0x0F, line >> 4, line & 0x0F, mic >> 4, mic & 0x0F,
                aux >> 4, aux & 0x0F, mono >> 4, mono & 0x0F, pcspk);
     }
