@@ -129,8 +129,9 @@ int mdf_end_sequence() {
     return result;
 }
 
-int mdf_run_full_test(int use_stereo, int mixer_ok) {
-    fmblk_init(use_stereo);
+int mdf_run_full_test(caps_t *caps) {
+    /* The OPL3 plays the right side on its own channel */
+    fmblk_init(caps->fm == CAPS_FM_OPL3);
     fmblk_ref_prepare();
 
     /* Next PCM step, a chunk per frame */
@@ -146,7 +147,7 @@ int mdf_run_full_test(int use_stereo, int mixer_ok) {
     fmblk_tone(CHIPID_FRAMES);
 
     /* MIXER */
-    mdf_gap(SILENCE_FRAMES, mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
+    mdf_gap(SILENCE_FRAMES, caps->mixer_ok ? PREP_WM_OK : PREP_WM_BAD);
     fmblk_tone(WM_FRAMES);
 
     /* FM */

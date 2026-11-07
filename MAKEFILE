@@ -12,7 +12,7 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\cms.h include\cmsseq.h include\seq.h include\fmblk.h include\pcmblk.h &
+       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\caps.h include\cms.h include\cmsseq.h include\seq.h include\fmblk.h include\pcmblk.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 

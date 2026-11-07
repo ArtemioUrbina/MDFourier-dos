@@ -21,6 +21,7 @@
 #include "host.h"
 #include "cms.h"
 #include "cmsseq.h"
+#include "caps.h"
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
@@ -38,16 +39,14 @@ int timing_test(double hz);
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
+    caps_t        caps = { CAPS_FM_NONE, CMS_NONE, 0, 0, { 0, 0 }, 0, 0, MIXER_UNKNOWN, 0 };
     double        hz;
-    int           stereo, i, set_mixer = 1, report_only = 0, mixer, mixer_ok, result;
+    int           i, set_mixer = 1, report_only = 0, result;
     int           bad_option = 0;
     char          *wss_ignored = NULL;
-    int           sbpro_compatible = 0;
     int           timing_only = 0;
     int           cms_mode = 0;
-    int           cms_found = CMS_NONE;
-    int           game_blaster = 0;   /* CMS without a DSP, nor a mixer */
-    unsigned      cms_port = 0;
+    int           game_blaster;       /* CMS without a DSP, nor a mixer */
 
     printf("MDFourier DOS 0.955 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
@@ -63,8 +62,8 @@ int main(int argc, char *argv[]) {
                 bad_option = 1;
         } else if ((argv[i][0] == '/' || argv[i][0] == '-') &&
                    (argv[i][1] == 'C' || argv[i][1] == 'c') && argv[i][2] == ':') {
-            if (sscanf(argv[i] + 3, "%x", &cms_port) != 1 ||
-                cms_port < 0x210 || cms_port > 0x260 || (cms_port & 0x0F))
+            if (sscanf(argv[i] + 3, "%x", &caps.cms_port) != 1 ||
+                caps.cms_port < 0x210 || caps.cms_port > 0x260 || (caps.cms_port & 0x0F))
                 bad_option = 1;
             cms_mode = 1;
         } else if (opt == 'C' || opt == 'c')
@@ -152,39 +151,44 @@ int main(int argc, char *argv[]) {
     }
 
     if (cms_mode && !report_only) {
-        if (!cms_port)
-            cms_port = cfg.port != -1 ? (unsigned)cfg.port : 0x220;
-        cms_found = cms_detect((uint16_t)cms_port);
-        if (cms_found == CMS_NONE) {
-            printf(" CMS: not found at 0x%03X, %s\n", cms_port, cms_detect_text());
+        if (!caps.cms_port)
+            caps.cms_port = cfg.port != -1 ? (unsigned)cfg.port : 0x220;
+        caps.cms = cms_detect((uint16_t)caps.cms_port);
+        if (caps.cms == CMS_NONE) {
+            printf(" CMS: not found at 0x%03X, %s\n", caps.cms_port, cms_detect_text());
             return EXIT_NO_CMS;
         }
-        printf(" CMS: 0x%03X, %s\n", cms_port, cms_detect_text());
-        game_blaster = cms_found == CMS_LATCH;
+        printf(" CMS: 0x%03X, %s\n", caps.cms_port, cms_detect_text());
     }
+    game_blaster = caps.cms == CMS_LATCH;
 
     if (cfg.port != -1 && !game_blaster) {
-        dsp_version_t ver;
         uint16_t base = (uint16_t)cfg.port;
 
         if (!dsp_reset(base)) {
             printf(" DSP: no answer at 0x%03X\n", base);
             wss_ignored = "no DSP";
-        } else if (!dsp_get_version(base, &ver)) {
+        } else if (!dsp_get_version(base, &caps.dsp_version)) {
             printf(" DSP: reset OK, no version\n");
             wss_ignored = "no DSP version";
         } else {
+            uint8_t major = caps.dsp_version.major;
+
+            caps.dsp = 1;
+            /* The ESS identify command goes only to a DSP 3.xx, the
+             * version the AudioDrive reports */
+            caps.dsp_ess = major == 3 && mixer_is_ess(base);
             if (verbose)
-                printf(" DSP: version %u.%02u%s\n", ver.major, ver.minor,
-                       mixer_is_ess(base) ? ", ESS" : "");
+                printf(" DSP: version %u.%02u%s\n", major, caps.dsp_version.minor,
+                       caps.dsp_ess ? ", ESS" : "");
             /* SB Pro compatibles, check for WSS codec next to the DSP */
-            if (ver.major == 3 && host_is_windows())
+            if (major == 3 && host_is_windows())
                 wss_ignored = "Windows owns the card's 16-bit hardware";
-            else if (ver.major == 3 && !mixer_is_ess(base))
-                sbpro_compatible = 1;
-            else if (ver.major == 3)
+            else if (major == 3 && !caps.dsp_ess)
+                caps.sbpro_compatible = 1;
+            else if (major == 3)
                 wss_ignored = "ESS plays 16-bit in its Extended mode";
-            else if (ver.major >= 4)
+            else if (major >= 4)
                 wss_ignored = "DSP 4.xx plays 16-bit itself";
             else
                 wss_ignored = "this DSP plays mono only";
@@ -196,7 +200,7 @@ int main(int argc, char *argv[]) {
         if (env_wss_cfg.mode != WSS_UNSET)
             printf(" /W: ignored, /R only reports the mixer\n");
         mixer_report(&cfg);
-        if (sbpro_compatible)
+        if (caps.sbpro_compatible)
             sax_mixer_report();
         return EXIT_OK;
     }
@@ -204,7 +208,7 @@ int main(int argc, char *argv[]) {
     if (wss_ignored && env_wss_cfg.mode != WSS_UNSET)
         printf(" /W: ignored, %s\n", wss_ignored);
 
-    if (sbpro_compatible)
+    if (caps.sbpro_compatible)
         sax_detect();
 
     /* WSS codec and no /W  */
@@ -213,7 +217,7 @@ int main(int argc, char *argv[]) {
 
     if (set_mixer && !game_blaster) {
         int mixer_saved = mixer_set_standard(&cfg);
-        int sax_saved   = sbpro_compatible ? sax_mixer_set() : -1;
+        int sax_saved   = caps.sbpro_compatible ? sax_mixer_set() : -1;
 
         /* Both, or whichever this card has */
         if (mixer_saved == -1)
@@ -233,23 +237,23 @@ int main(int argc, char *argv[]) {
 
     if (game_blaster) {
         printf(" Mixer: none (Game Blaster), set the volume manually\n");
-        mixer = MIXER_NONE;
+        caps.mixer = MIXER_NONE;
     } else
-        mixer = mixer_report(&cfg);
+        caps.mixer = mixer_report(&cfg);
 
     /* The OPL3-SAx  */
-    if (sbpro_compatible) {
+    if (caps.sbpro_compatible) {
         int sax_mixer = sax_mixer_report();
 
-        if (sax_mixer != MIXER_NONE && sax_mixer != MIXER_OK && mixer != MIXER_UNKNOWN)
-            mixer = sax_mixer;
+        if (sax_mixer != MIXER_NONE && sax_mixer != MIXER_OK && caps.mixer != MIXER_UNKNOWN)
+            caps.mixer = sax_mixer;
     }
-    if(mixer == MIXER_WARN && !set_mixer)
+    if(caps.mixer == MIXER_WARN && !set_mixer)
         printf("  NOTE: kept by /K, run without it to set the mixer for capture\n");
 
     /* Recorded in the watermark tone. No mixer chip counts as valid */
-    mixer_ok = (mixer == MIXER_OK || mixer == MIXER_NONE);
-    if(!mixer_ok)
+    caps.mixer_ok = (caps.mixer == MIXER_OK || caps.mixer == MIXER_NONE);
+    if(!caps.mixer_ok)
         printf(" Mixer: not verified, watermarking\n");
 
     if (!vsync_calibrate(&hz)) {
@@ -260,7 +264,7 @@ int main(int argc, char *argv[]) {
 
     if (cms_mode) {
         printf("Playing MDFourier CMS...\n");
-        result = cmsseq_run(mixer_ok);
+        result = cmsseq_run(&caps);
         if (result == SEQ_ABORTED)
             return EXIT_ABORTED;
         return result == SEQ_BAD_FRAMES ? EXIT_BAD_FRAMES : EXIT_OK;
@@ -272,16 +276,16 @@ int main(int argc, char *argv[]) {
 
     printf(" FM: Probing (%s)... ", opl_driver.name);
     if(opl_driver.detect()) {
-        printf("found (%s)\n", opl_is_opl3() ? "OPL3" : "OPL2");
+        caps.fm = opl_is_opl3() ? CAPS_FM_OPL3 : CAPS_FM_OPL2;
+        printf("found (%s)\n", caps.fm == CAPS_FM_OPL3 ? "OPL3" : "OPL2");
         opl_driver.init();
 
         /* OPL3 and compatibles */
-        stereo = opl_is_opl3();
-        if (stereo)
+        if (caps.fm == CAPS_FM_OPL3)
             opl3_set_new_mode(1);
 
         printf("Playing MDFourier...\n");
-        result = mdf_run_full_test(stereo, mixer_ok);
+        result = mdf_run_full_test(&caps);
 
         /* silence the chip */
         opl_driver.reset();

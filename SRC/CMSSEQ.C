@@ -324,10 +324,10 @@ void cmsseq_chord_fade() {
     }
 }
 
-int cmsseq_run(int mixer_ok) {
+int cmsseq_run(caps_t *caps) {
     int i;
 
-    cmsseq_wm_ok = mixer_ok;
+    cmsseq_wm_ok = caps->mixer_ok;
     cms_reset();
     seq_begin(NULL);
 

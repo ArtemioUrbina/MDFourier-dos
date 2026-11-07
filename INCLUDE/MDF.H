@@ -2,6 +2,9 @@
 #define MDF_H
 
 
-int mdf_run_full_test(int use_stereo, int mixer_ok);
+#include "caps.h"
+
+/* SEQ_OK, SEQ_ABORTED or SEQ_BAD_FRAMES */
+int mdf_run_full_test(caps_t *caps);
 
 #endif
