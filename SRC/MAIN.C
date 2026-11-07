@@ -19,6 +19,8 @@
 #include "seq.h"
 #include "kbd.h"
 #include "host.h"
+#include "cms.h"
+#include "cmsseq.h"
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
@@ -30,6 +32,7 @@
 #define EXIT_BAD_FRAMES 6   /* frame out of tolerance, discard */
 #define EXIT_WSS        7   /* WSS codec found, /W needed */
 #define EXIT_BAD_IRQ    8   /* the DSP raises another IRQ than BLASTER I */
+#define EXIT_NO_CMS     9   /* /C: no CMS at the port */
 
 int timing_test(double hz);
 
@@ -41,6 +44,10 @@ int main(int argc, char *argv[]) {
     char          *wss_ignored = NULL;
     int           sbpro_compatible = 0;
     int           timing_only = 0;
+    int           cms_mode = 0;
+    int           cms_found = CMS_NONE;
+    int           game_blaster = 0;   /* CMS without a DSP, nor a mixer */
+    unsigned      cms_port = 0;
 
     printf("MDFourier DOS 0.955 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
@@ -54,7 +61,15 @@ int main(int argc, char *argv[]) {
             (argv[i][1] == 'W' || argv[i][1] == 'w') && argv[i][2] == ':') {
             if (!env_parse_wss(argv[i] + 3))
                 bad_option = 1;
-        } else if (opt == 'K' || opt == 'k')
+        } else if ((argv[i][0] == '/' || argv[i][0] == '-') &&
+                   (argv[i][1] == 'C' || argv[i][1] == 'c') && argv[i][2] == ':') {
+            if (sscanf(argv[i] + 3, "%x", &cms_port) != 1 ||
+                cms_port < 0x210 || cms_port > 0x260 || (cms_port & 0x0F))
+                bad_option = 1;
+            cms_mode = 1;
+        } else if (opt == 'C' || opt == 'c')
+            cms_mode = 1;
+        else if (opt == 'K' || opt == 'k')
             set_mixer = 0;
         else if (opt == 'R' || opt == 'r')
             report_only = 1;
@@ -70,6 +85,7 @@ int main(int argc, char *argv[]) {
         printf("Usage: MDF [/C[:port]] [/K] [/R] [/T] [/V] [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
                "  Needs a 486SX or faster with internal cache enabled\n"
                "  The mixer levels are set for playback and restored at exit\n"
+               "  /C  CMS/Game Blaster sequence instead of FM and PCM, BLASTER A or /C:220\n"
                "  /K  keep the current mixer settings and play sequence\n"
                "  /R  print the current mixer settings and exit\n"
                "  /T  frame timing test, 30s without sound, and exit\n"
@@ -135,7 +151,19 @@ int main(int argc, char *argv[]) {
         return timing_test(hz);
     }
 
-    if (cfg.port != -1) {
+    if (cms_mode && !report_only) {
+        if (!cms_port)
+            cms_port = cfg.port != -1 ? (unsigned)cfg.port : 0x220;
+        cms_found = cms_detect((uint16_t)cms_port);
+        if (cms_found == CMS_NONE) {
+            printf(" CMS: not found at 0x%03X, %s\n", cms_port, cms_detect_text());
+            return EXIT_NO_CMS;
+        }
+        printf(" CMS: 0x%03X, %s\n", cms_port, cms_detect_text());
+        game_blaster = cms_found == CMS_LATCH;
+    }
+
+    if (cfg.port != -1 && !game_blaster) {
         dsp_version_t ver;
         uint16_t base = (uint16_t)cfg.port;
 
@@ -183,7 +211,7 @@ int main(int argc, char *argv[]) {
     if (sax_needs_config())
         return EXIT_WSS;
 
-    if (set_mixer) {
+    if (set_mixer && !game_blaster) {
         int mixer_saved = mixer_set_standard(&cfg);
         int sax_saved   = sbpro_compatible ? sax_mixer_set() : -1;
 
@@ -203,7 +231,11 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    mixer = mixer_report(&cfg);
+    if (game_blaster) {
+        printf(" Mixer: none (Game Blaster), set the volume manually\n");
+        mixer = MIXER_NONE;
+    } else
+        mixer = mixer_report(&cfg);
 
     /* The OPL3-SAx  */
     if (sbpro_compatible) {
@@ -224,6 +256,14 @@ int main(int argc, char *argv[]) {
         printf("No usable vertical retrace (VGA required), measured %.2f Hz\n", hz);
         vsync_diagnose();
         return EXIT_NO_VGA;
+    }
+
+    if (cms_mode) {
+        printf("Playing MDFourier CMS...\n");
+        result = cmsseq_run(mixer_ok);
+        if (result == SEQ_ABORTED)
+            return EXIT_ABORTED;
+        return result == SEQ_BAD_FRAMES ? EXIT_BAD_FRAMES : EXIT_OK;
     }
 
     pcm_init(&cfg, hz);

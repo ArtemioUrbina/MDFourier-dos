@@ -1,6 +1,6 @@
 # MDFourier-DOS build script (Open Watcom / wmake)
 #
-# 16-bit real mode DOS executable, small model, no DOS extender
+# 16-bit real mode DOS executable, medium model, no DOS extender
 #
 # Usage:
 #   wmake            build mdf.exe (release)
@@ -12,21 +12,21 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\seq.h include\fmblk.h include\pcmblk.h &
+       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\cms.h include\cmsseq.h include\seq.h include\fmblk.h include\pcmblk.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\cms.obj build\cmsseq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
 # -bt=dos       target DOS
-# -ms           small memory model (64K code + 64K data)
+# -mm           medium memory model (far code, 64K data)
 # -0            8086/8088 instructions only
 # -fpi          uses an 8087 if present, software emulation if not
 # -d2           full debug info
 # -i=include    include header files
-CFLAGS = -q -bt=dos -ms -0 -fpi -i=include
+CFLAGS = -q -bt=dos -mm -0 -fpi -i=include
 
 # wmake DEBUG=1 adds full debug info (-d2)
 !ifdef DEBUG
@@ -45,6 +45,12 @@ $(BIN): dirs $(OBJS)
 
 build\main.obj: src\main.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\main.c
+
+build\cms.obj: src\cms.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\cms.c
+
+build\cmsseq.obj: src\cmsseq.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\cmsseq.c
 
 build\seq.obj: src\seq.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\seq.c
