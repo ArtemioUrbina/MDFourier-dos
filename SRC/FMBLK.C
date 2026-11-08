@@ -152,8 +152,12 @@ void fmblk_run_sweep(unsigned frames, sweep_note_t *notes, unsigned steps,
     fmblk_note_off();
 }
 
+unsigned fmblk_sweep_steps(unsigned stride) {
+    return (SWEEP_STEPS + stride - 1) / stride;
+}
+
 void fmblk_sweep(unsigned frames, unsigned stride) {
-    fmblk_run_sweep(frames, sweep, (SWEEP_STEPS + stride - 1) / stride, stride, 0);
+    fmblk_run_sweep(frames, sweep, fmblk_sweep_steps(stride), stride, 0);
 }
 
 void fmblk_sine_sweep(unsigned frames) {

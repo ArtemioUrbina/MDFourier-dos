@@ -25,6 +25,8 @@ typedef struct {
     dsp_version_t dsp_version;
     int           dsp_ess;          /* an ESS AudioDrive behind a DSP 3.xx */
     int           sbpro_compatible; /* DSP 3.xx, not ESS: a WSS codec may sit next to it */
+    int           pcm;              /* 8-bit mono PCM plays, pcm_init() passed */
+    int           adpcm;            /* the DSP takes ADPCM, pcm_adpcm_probe() */
 
     int           mixer;            /* MIXER_UNKNOWN, MIXER_WARN, MIXER_OK or MIXER_NONE */
     int           mixer_ok;         /* the mixer was verified, recorded in the watermark tone */

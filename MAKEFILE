@@ -12,11 +12,11 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\caps.h include\cms.h include\cmsseq.h include\seq.h include\fmblk.h include\pcmblk.h &
+       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\caps.h include\cms.h include\cmsblk.h include\sb2seq.h include\seq.h include\fmblk.h include\pcmblk.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\cms.obj build\cmsseq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\sax.obj build\host.obj build\cms.obj build\cmsblk.obj build\sb2seq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
@@ -49,8 +49,11 @@ build\main.obj: src\main.c $(HDRS)
 build\cms.obj: src\cms.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\cms.c
 
-build\cmsseq.obj: src\cmsseq.c $(HDRS)
-	$(CC) $(CFLAGS) -fo=$@ src\cmsseq.c
+build\cmsblk.obj: src\cmsblk.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\cmsblk.c
+
+build\sb2seq.obj: src\sb2seq.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\sb2seq.c
 
 build\seq.obj: src\seq.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\seq.c

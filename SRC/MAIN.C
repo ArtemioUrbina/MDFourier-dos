@@ -20,7 +20,7 @@
 #include "kbd.h"
 #include "host.h"
 #include "cms.h"
-#include "cmsseq.h"
+#include "sb2seq.h"
 #include "caps.h"
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
@@ -28,25 +28,25 @@
 #define EXIT_USAGE      1   /* bad command line */
 #define EXIT_WINDOWS    2   /* running under Windows NT, 2000 or XP */
 #define EXIT_NO_VGA     3   /* no usable vertical retrace */
-#define EXIT_NO_FM      4   /* no OPL2/OPL3 at 0x388 */
+#define EXIT_NO_FM      4   /* no OPL2/OPL3 at 0x388, CMS sequence: no CMS either */
 #define EXIT_ABORTED    5   /* ESC pressed */
 #define EXIT_BAD_FRAMES 6   /* frame out of tolerance, discard */
 #define EXIT_WSS        7   /* WSS codec found, /W needed */
 #define EXIT_BAD_IRQ    8   /* the DSP raises another IRQ than BLASTER I */
-#define EXIT_NO_CMS     9   /* /C: no CMS at the port */
 
 int timing_test(double hz);
+void main_probe_fm(caps_t *caps);
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
-    caps_t        caps = { CAPS_FM_NONE, CMS_NONE, 0, 0, { 0, 0 }, 0, 0, MIXER_UNKNOWN, 0 };
+    caps_t        caps = { CAPS_FM_NONE, CMS_NONE, 0, 0, { 0, 0 }, 0, 0, 0, 0, MIXER_UNKNOWN, 0 };
     double        hz;
     int           i, set_mixer = 1, report_only = 0, result;
     int           bad_option = 0;
     char          *wss_ignored = NULL;
     int           timing_only = 0;
     int           cms_mode = 0;
-    int           game_blaster;       /* CMS without a DSP, nor a mixer */
+    int           game_blaster;       /* CMS at BLASTER A without a DSP, nor a mixer */
 
     printf("MDFourier DOS 0.955 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
@@ -84,7 +84,8 @@ int main(int argc, char *argv[]) {
         printf("Usage: MDF [/C[:port]] [/K] [/R] [/T] [/V] [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
                "  Needs a 486SX or faster with internal cache enabled\n"
                "  The mixer levels are set for playback and restored at exit\n"
-               "  /C  CMS/Game Blaster sequence instead of FM and PCM, BLASTER A or /C:220\n"
+               "  /C  CMS sequence: CMS, FM, 8-bit PCM and ADPCM, SB 2.0 and Game Blaster,\n"
+               "      CMS at BLASTER A or /C:220\n"
                "  /K  keep the current mixer settings and play sequence\n"
                "  /R  print the current mixer settings and exit\n"
                "  /T  frame timing test, 30s without sound, and exit\n"
@@ -154,13 +155,14 @@ int main(int argc, char *argv[]) {
         if (!caps.cms_port)
             caps.cms_port = cfg.port != -1 ? (unsigned)cfg.port : 0x220;
         caps.cms = cms_detect((uint16_t)caps.cms_port);
-        if (caps.cms == CMS_NONE) {
+        if (caps.cms == CMS_NONE)
             printf(" CMS: not found at 0x%03X, %s\n", caps.cms_port, cms_detect_text());
-            return EXIT_NO_CMS;
-        }
-        printf(" CMS: 0x%03X, %s\n", caps.cms_port, cms_detect_text());
+        else
+            printf(" CMS: 0x%03X, %s\n", caps.cms_port, cms_detect_text());
     }
-    game_blaster = caps.cms == CMS_LATCH;
+    /* A Game Blaster at BLASTER A, no Sound Blaster to set up there */
+    game_blaster = caps.cms == CMS_LATCH &&
+                   (cfg.port == -1 || caps.cms_port == (unsigned)cfg.port);
 
     if (cfg.port != -1 && !game_blaster) {
         uint16_t base = (uint16_t)cfg.port;
@@ -196,6 +198,10 @@ int main(int argc, char *argv[]) {
     } else
         wss_ignored = "no BLASTER A";
 
+    /* 8-bit mono and ADPCM only, the WSS codec stays out of it */
+    if (cms_mode)
+        wss_ignored = "the CMS sequence plays no 16-bit";
+
     if (report_only) {
         if (env_wss_cfg.mode != WSS_UNSET)
             printf(" /W: ignored, /R only reports the mixer\n");
@@ -208,7 +214,7 @@ int main(int argc, char *argv[]) {
     if (wss_ignored && env_wss_cfg.mode != WSS_UNSET)
         printf(" /W: ignored, %s\n", wss_ignored);
 
-    if (caps.sbpro_compatible)
+    if (caps.sbpro_compatible && !cms_mode)
         sax_detect();
 
     /* WSS codec and no /W  */
@@ -262,44 +268,64 @@ int main(int argc, char *argv[]) {
         return EXIT_NO_VGA;
     }
 
-    if (cms_mode) {
-        printf("Playing MDFourier CMS...\n");
-        result = cmsseq_run(&caps);
-        if (result == SEQ_ABORTED)
-            return EXIT_ABORTED;
-        return result == SEQ_BAD_FRAMES ? EXIT_BAD_FRAMES : EXIT_OK;
-    }
-
-    pcm_init(&cfg, hz);
+    if (!game_blaster)
+        caps.pcm = pcm_init(&cfg, hz, !cms_mode);
     if (pcm_irq_mismatch())
         return EXIT_BAD_IRQ;
 
-    printf(" FM: Probing (%s)... ", opl_driver.name);
-    if(opl_driver.detect()) {
-        caps.fm = opl_is_opl3() ? CAPS_FM_OPL3 : CAPS_FM_OPL2;
-        printf("found (%s)\n", caps.fm == CAPS_FM_OPL3 ? "OPL3" : "OPL2");
-        opl_driver.init();
+    main_probe_fm(&caps);
 
-        /* OPL3 and compatibles */
-        if (caps.fm == CAPS_FM_OPL3)
-            opl3_set_new_mode(1);
-
+    if (cms_mode) {
+        /* Sync comes from FM, or from CMS on a Game Blaster */
+        if (caps.fm == CAPS_FM_NONE && caps.cms == CMS_NONE) {
+            printf(" CMS sequence: no FM or CMS to sync with\n");
+            return EXIT_NO_FM;
+        }
+        if (caps.pcm) {
+            caps.adpcm = pcm_adpcm_probe();
+            printf(" PCM: 8-bit mono, %s\n", caps.adpcm ? "ADPCM 4, 2.6 and 2-bit"
+                                                         : "no ADPCM (the DSP ignored its commands)");
+        }
+        printf(" CMS sequence: FM %s, CMS %s, PCM %s, ADPCM %s, sync from %s\n",
+               caps.fm != CAPS_FM_NONE ? "plays" : "filler",
+               caps.cms != CMS_NONE ? "plays" : "filler",
+               caps.pcm ? "plays" : "filler",
+               caps.adpcm ? "plays" : "filler",
+               caps.fm != CAPS_FM_NONE ? "FM" : "CMS");
+        printf("Playing MDFourier CMS...\n");
+        result = sb2seq_run(&caps);
+    } else {
+        if (caps.fm == CAPS_FM_NONE)
+            return EXIT_NO_FM;
         printf("Playing MDFourier...\n");
         result = mdf_run_full_test(&caps);
-
-        /* silence the chip */
-        opl_driver.reset();
-
-    } else {
-        printf("not found\n");
-        return EXIT_NO_FM;
     }
+
+    /* silence the chip */
+    if (caps.fm != CAPS_FM_NONE)
+        opl_driver.reset();
 
     if (result == SEQ_ABORTED)
         return EXIT_ABORTED;
     if (result == SEQ_BAD_FRAMES)
         return EXIT_BAD_FRAMES;
     return EXIT_OK;
+}
+
+/* OPL2/OPL3 at 0x388, set up for the sequence when found */
+void main_probe_fm(caps_t *caps) {
+    printf(" FM: Probing (%s)... ", opl_driver.name);
+    if (!opl_driver.detect()) {
+        printf("not found\n");
+        return;
+    }
+    caps->fm = opl_is_opl3() ? CAPS_FM_OPL3 : CAPS_FM_OPL2;
+    printf("found (%s)\n", caps->fm == CAPS_FM_OPL3 ? "OPL3" : "OPL2");
+    opl_driver.init();
+
+    /* OPL3 and compatibles */
+    if (caps->fm == CAPS_FM_OPL3)
+        opl3_set_new_mode(1);
 }
 
 /* /T: 30 s of frames, no sound, to see how the timing holds. Under

@@ -28,6 +28,8 @@ void fmblk_tone(unsigned frames);
 void fmblk_pulse_train();
 void fmblk_instrument(opl_instrument_t instrument);
 void fmblk_sweep(unsigned frames, unsigned stride);
+/* Steps fmblk_sweep() plays with every stride-th note */
+unsigned fmblk_sweep_steps(unsigned stride);
 void fmblk_sine_sweep(unsigned frames);
 void fmblk_steps(fmblk_steps_t kind, unsigned steps, unsigned frames);
 

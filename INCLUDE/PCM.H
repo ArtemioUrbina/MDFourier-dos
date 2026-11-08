@@ -17,8 +17,9 @@ typedef enum {
 
 /* Checks BLASTER A, I and D, resets the DSP, builds the tables and
  * installs the IRQ handler (removed at exit). 1 if PCM can play.
- * frame_hz sizes the tones to the blocks */
-int  pcm_init(blaster_cfg_t *cfg, double frame_hz);
+ * frame_hz sizes the tones to the blocks. extended: also sets up the
+ * stereo and 16-bit ones, otherwise only 8-bit mono and ADPCM play */
+int  pcm_init(blaster_cfg_t *cfg, double frame_hz, int extended);
 /* pcm_init() saw the DSP raise another IRQ than BLASTER I: said so, stop */
 int  pcm_irq_mismatch();
 
@@ -82,6 +83,37 @@ void pcmx_step_start(pcmx_kind_t kind);
 void pcmx_steps_end(pcmx_kind_t kind);
 /* 1 when this card plays that kind, otherwise its blocks are silent */
 int pcmx_enabled(pcmx_kind_t kind);
+
+/* ---- ADPCM ----
+ * Creative's 4, 2.6 and 2-bit ADPCM at 10000 Hz, decoded by the DSP to
+ * 8-bit mono. Every Creative DSP from 1.xx to 4.xx, clones may not */
+
+#define PCM_ADPCM_SWEEP_STEPS   16      /* 50 Hz to 4 kHz */
+#define PCM_ADPCM_LEVEL_STEPS   8       /* 0 to -42 dB in 6 dB steps */
+
+typedef enum {
+    PCM_ADPCM4,
+    PCM_ADPCM3,                 /* 2.6-bit: three samples in a byte */
+    PCM_ADPCM2
+} pcm_adpcm_t;
+
+/* After pcm_init(), before the sequence: 1 if the DSP takes ADPCM.
+ * Without it the ADPCM calls below do nothing */
+int  pcm_adpcm_probe();
+
+/* Clock tone, 4-bit at rate / 8. Built from the start of the silence
+ * before it, a chunk per frame; armed in its last frame, started on
+ * the edge, pcm_adpcm_clock_stop() after the block */
+void pcm_adpcm_clock_build(unsigned frames);
+void pcm_adpcm_clock_arm();
+void pcm_adpcm_clock_start();
+void pcm_adpcm_clock_stop();
+
+/* As the 8-bit steps: queue a step frames before it plays, buf
+ * alternates 0/1 */
+void pcm_adpcm_step_fill(pcm_adpcm_t format, pcm_steps_t kind, unsigned step, unsigned buf, unsigned frames);
+void pcm_adpcm_step_start(pcm_adpcm_t format, pcm_steps_t kind, unsigned buf);
+void pcm_adpcm_steps_end(pcm_steps_t kind);
 
 /* After the sequence: speaker off, DSP reset if anything was left
  * playing. Both click, kept out of the Silence block */
