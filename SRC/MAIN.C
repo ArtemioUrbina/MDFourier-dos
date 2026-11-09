@@ -22,6 +22,7 @@
 #include "cms.h"
 #include "sb2seq.h"
 #include "caps.h"
+#include "crystal.h"
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
@@ -36,6 +37,7 @@
 
 int timing_test(double hz);
 void main_probe_fm(caps_t *caps);
+void main_crystal_unity(caps_t *caps, int set_mixer, uint16_t sb_base);
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
@@ -48,7 +50,7 @@ int main(int argc, char *argv[]) {
     int           cms_mode = 0;
     int           game_blaster;       /* CMS at BLASTER A without a DSP, nor a mixer */
 
-    printf("MDFourier DOS 0.955 [240p Test Suite Fourier Audio compare tool]\n");
+    printf("MDFourier DOS 0.96 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
 
     for (i = 1; i < argc; i++) {
@@ -89,7 +91,8 @@ int main(int argc, char *argv[]) {
                "  /K  keep the current mixer settings and play sequence\n"
                "  /R  print the current mixer settings and exit\n"
                "  /T  frame timing test, 30s without sound, and exit\n"
-               "  /V  verbose: show BLASTER, mixer levels, DSP and IRQ details\n"
+               "  /V  verbose: show BLASTER, mixer levels, DSP and IRQ details,\n"
+               "      Crystal CS4236/CS4237B codec levels and SB/WSS context\n"
                "  /W  16-bit through WSS codec (OPL3-SAx and SB Pro compatibles)\n"
                "      AUTO detects it\n"
                "      OFF skips it\n"
@@ -206,8 +209,10 @@ int main(int argc, char *argv[]) {
         if (env_wss_cfg.mode != WSS_UNSET)
             printf(" /W: ignored, /R only reports the mixer\n");
         mixer_report(&cfg);
-        if (caps.sbpro_compatible)
+        if (caps.sbpro_compatible) {
+            crystal_check((uint16_t)cfg.port);
             sax_mixer_report();
+        }
         return EXIT_OK;
     }
 
@@ -254,6 +259,10 @@ int main(int argc, char *argv[]) {
         if (sax_mixer != MIXER_NONE && sax_mixer != MIXER_OK && caps.mixer != MIXER_UNKNOWN)
             caps.mixer = sax_mixer;
     }
+    /* A CS4237B translates the SB levels into its own, we show them */
+    if (verbose && caps.sbpro_compatible)
+        crystal_check((uint16_t)cfg.port);
+
     if(caps.mixer == MIXER_WARN && !set_mixer)
         printf("  NOTE: kept by /K, run without it to set the mixer for capture\n");
 
@@ -292,11 +301,13 @@ int main(int argc, char *argv[]) {
                caps.pcm ? "plays" : "filler",
                caps.adpcm ? "plays" : "filler",
                caps.fm != CAPS_FM_NONE ? "FM" : "CMS");
+        main_crystal_unity(&caps, set_mixer, (uint16_t)cfg.port);
         printf("Playing MDFourier CMS...\n");
         result = sb2seq_run(&caps);
     } else {
         if (caps.fm == CAPS_FM_NONE)
             return EXIT_NO_FM;
+        main_crystal_unity(&caps, set_mixer, (uint16_t)cfg.port);
         printf("Playing MDFourier...\n");
         result = mdf_run_full_test(&caps);
     }
@@ -326,6 +337,13 @@ void main_probe_fm(caps_t *caps) {
     /* OPL3 and compatibles */
     if (caps->fm == CAPS_FM_OPL3)
         opl3_set_new_mode(1);
+}
+
+/* A Crystal codec turns SB FM 7 into +12 dB on its wavetable port, we set
+ * it to 0 dB. After the setup's last DSP command, which would undo it */
+void main_crystal_unity(caps_t *caps, int set_mixer, uint16_t sb_base) {
+    if (set_mixer && caps->sbpro_compatible)
+        crystal_synth_unity(sb_base);
 }
 
 /* /T: 30 s of frames, no sound, to see how the timing holds. Under

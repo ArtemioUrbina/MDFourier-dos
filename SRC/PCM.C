@@ -722,8 +722,8 @@ void pcm_print_report() {
  *
  * 8-bit stereo, DSP 3.xx: SB Pro method, as in Creative's programming
  * guide ("8-bit Stereo High-speed Single-cycle Transfer"): mixer 0x0E
- * stereo on and output filter off, one silent byte so the channels start
- * in order, then high-speed transfers at 1 MHz/23 bytes/s (21739 Hz per
+ * stereo on and output filter off, one silent byte as the guide does,
+ * then high-speed transfers at 1 MHz/23 bytes/s (21739 Hz per
  * channel). Mixer 0x0E restored by pcm_finish().
  * 8-bit stereo, DSP 4.xx: 0xC0 with the stereo mode bit, 22050 Hz.
  * 16-bit stereo: a pcm16_driver_t (PCMDRV.H)
@@ -1057,8 +1057,9 @@ int pcmx_enabled(pcmx_kind_t kind) {
     return pcm_ready && (pcmx_kind_info[kind].section == PCMX_STEREO ? pcmx_stereo_ok : pcm16 != NULL);
 }
 
-/* DSP 3.xx: stereo on, output filter off and one silent byte so the
- * channels start in order. */
+/* DSP 3.xx: stereo on, output filter off and one silent byte first, the
+ * documented SB Pro procedure. The Orpheus II's CS4237B plays the same
+ * with or without it */
 void pcmx_begin() {
     if (!pcmx_enabled(PCMX_SEP8) || !pcmx_sbpro_path)
         return;
@@ -1365,8 +1366,9 @@ unsigned pcm_transfers() {
  * ones DOSBox-X uses for the Sound Blaster, from real hardware.
  *
  * One rate for all three, 10000 Hz (TC 156): in range for 4-bit (12 kHz),
- * 2.6-bit (13 kHz) and 2-bit (11 kHz) on DSP 1.xx/2.xx. The SB 2.0
- * plays it as 1000000 / (257 - TC), 9901 Hz: the clock tone measures it.
+ * 2.6-bit (13 kHz) and 2-bit (11 kHz) on DSP 1.xx/2.xx. Measured: the
+ * SB 2.0 plays it at 10001 Hz, the SB16 at 9958 Hz, unlike 8-bit PCM at
+ * the same card's time constant 211. The clock tone measures it.
  * ====================================================================== */
 
 #define ADPCM_TC        156
