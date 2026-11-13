@@ -23,6 +23,7 @@
 #include "wss.h"
 #include "env.h"
 #include "mixer.h"
+#include "carddrv.h"
 
 /* OPL3-SAx, at the codec's port + 0, read only: IRQ bits 5-3, DMA bits 2-0 */
 #define SAX_CODEC_CONFIG 0
@@ -434,6 +435,24 @@ void sax_detect() {
 int sax_needs_config() {
     return sax_needs_cfg;
 }
+
+void sax_card_detect(blaster_cfg_t *cfg) {
+    (void)cfg;
+    sax_detect();
+}
+
+card_t sax_card = {
+    "OPL3-SAx",
+    sax_card_detect,
+    sax_needs_config,
+    NULL,               /* mixer_notes */
+    sax_mixer_set,
+    NULL,               /* effects_off: its 3D is in its mixer */
+    sax_mixer_report,
+    NULL, NULL,         /* effects_on */
+    NULL,               /* report: its mixer report has it all */
+    NULL                /* before_play */
+};
 
 char *sax_no_16bit_reason() {
     return sax_reason[0] ? sax_reason : NULL;

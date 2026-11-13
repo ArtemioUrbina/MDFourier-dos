@@ -5,13 +5,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <i86.h>
 #include "carddrv.h"
 #include "dsp.h"
 #include "pcm.h"
 #include "env.h"
 #include "mixer.h"
-#include "sax.h"
 #include "opl.h"
 #include "pit.h"
 #include "vsync.h"
@@ -22,7 +22,6 @@
 #include "cms.h"
 #include "sb2seq.h"
 #include "caps.h"
-#include "crystal.h"
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
@@ -37,7 +36,7 @@
 
 int timing_test(double hz);
 void main_probe_fm(caps_t *caps);
-void main_crystal_unity(caps_t *caps, int set_mixer, uint16_t sb_base);
+void main_nothing_to_play(caps_t *caps, blaster_cfg_t *cfg, int cms_mode);
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
@@ -52,6 +51,13 @@ int main(int argc, char *argv[]) {
 
     printf("MDFourier DOS 0.96 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
+
+    /* DOS ends a program on Ctrl-C or Ctrl-Break at its next console
+     * call, without the exit handlers the IRQ vector would stay ours
+     * and the mixer as set for capture.
+     * We ignore both and only ESC stops MDF */
+    signal(SIGINT, SIG_IGN);
+    signal(SIGBREAK, SIG_IGN);
 
     for (i = 1; i < argc; i++) {
         char opt = 0;
@@ -93,7 +99,7 @@ int main(int argc, char *argv[]) {
                "  /T  frame timing test, 30s without sound, and exit\n"
                "  /V  verbose: show BLASTER, mixer levels, DSP and IRQ details,\n"
                "      Crystal CS4236/CS4237B codec levels and SB/WSS context\n"
-               "  /W  16-bit through WSS codec (OPL3-SAx and SB Pro compatibles)\n"
+               "  /W  16-bit through a WSS codec\n"
                "      AUTO detects it\n"
                "      OFF skips it\n"
                "      /W:530,7,3 sets values manually\n");
@@ -122,7 +128,7 @@ int main(int argc, char *argv[]) {
         pit_init();
 
     if (!env_get_blaster(&cfg))
-        printf(" BLASTER: not set, PCM and the mixer need it\n");
+        printf(" BLASTER: not set%s\n", report_only ? "" : ", PCM plays fillers");
     else if (verbose)
         env_print(&cfg);
 
@@ -208,33 +214,44 @@ int main(int argc, char *argv[]) {
     if (report_only) {
         if (env_wss_cfg.mode != WSS_UNSET)
             printf(" /W: ignored, /R only reports the mixer\n");
+        if (cfg.port == -1)
+            printf(" Mixer: nothing to report without BLASTER\n");
+        if (caps.sbpro_compatible)
+            cards_mixer_notes();
         mixer_report(&cfg);
         if (caps.sbpro_compatible) {
-            crystal_check((uint16_t)cfg.port);
-            sax_mixer_report();
+            cards_report((uint16_t)cfg.port);
+            cards_mixer_report(MIXER_UNKNOWN);
         }
         return EXIT_OK;
+    }
+
+    /* FM gives the sync, or CMS under /C: without either we stop here */
+    main_probe_fm(&caps);
+    if (caps.fm == CAPS_FM_NONE && (!cms_mode || caps.cms == CMS_NONE)) {
+        main_nothing_to_play(&caps, &cfg, cms_mode);
+        return EXIT_NO_FM;
     }
 
     if (wss_ignored && env_wss_cfg.mode != WSS_UNSET)
         printf(" /W: ignored, %s\n", wss_ignored);
 
+    /* The cards next to an SB Pro DSP: OPL3-SAx, Crystal (CARDS.C) */
     if (caps.sbpro_compatible && !cms_mode)
-        sax_detect();
+        cards_detect(&cfg);
 
     /* WSS codec and no /W  */
-    if (sax_needs_config())
+    if (cards_need_config())
         return EXIT_WSS;
+
+    if (caps.sbpro_compatible)
+        cards_mixer_notes();
 
     if (set_mixer && !game_blaster) {
         int mixer_saved = mixer_set_standard(&cfg);
-        int sax_saved   = caps.sbpro_compatible ? sax_mixer_set() : -1;
 
-        /* Both, or whichever this card has */
-        if (mixer_saved == -1)
-            mixer_saved = sax_saved;
-        else if (sax_saved != -1)
-            mixer_saved &= sax_saved;
+        if (caps.sbpro_compatible)
+            mixer_saved = cards_mixer_set(mixer_saved);
 
         if(mixer_saved != -1) {
             if(mixer_saved) {
@@ -244,6 +261,10 @@ int main(int argc, char *argv[]) {
                 printf(" Mixer: settings not accepted, set your mixer manually\n");
             atexit(mixer_restore);
         }
+
+        /* Effects that process the output like Crystal SRS 3D */
+        if (caps.sbpro_compatible)
+            cards_effects_off();
     }
 
     if (game_blaster) {
@@ -252,16 +273,19 @@ int main(int argc, char *argv[]) {
     } else
         caps.mixer = mixer_report(&cfg);
 
-    /* The OPL3-SAx  */
+    /* The cards mixers, and an effect kept by /K, which alters what is recorded */
     if (caps.sbpro_compatible) {
-        int sax_mixer = sax_mixer_report();
-
-        if (sax_mixer != MIXER_NONE && sax_mixer != MIXER_OK && caps.mixer != MIXER_UNKNOWN)
-            caps.mixer = sax_mixer;
+        caps.mixer = cards_mixer_report(caps.mixer);
+        caps.mixer = cards_effects_check(caps.mixer);
     }
+
     /* A CS4237B translates the SB levels into its own, we show them */
     if (verbose && caps.sbpro_compatible)
-        crystal_check((uint16_t)cfg.port);
+        cards_report((uint16_t)cfg.port);
+
+    if (verbose && !cms_mode)
+        printf(" Mixer: unfiltered sweeps %s\n", mixer_sbpro_filter_switched() ?
+               "with the output filter off" : "as the others, no filter switch here");
 
     if(caps.mixer == MIXER_WARN && !set_mixer)
         printf("  NOTE: kept by /K, run without it to set the mixer for capture\n");
@@ -269,7 +293,7 @@ int main(int argc, char *argv[]) {
     /* Recorded in the watermark tone. No mixer chip counts as valid */
     caps.mixer_ok = (caps.mixer == MIXER_OK || caps.mixer == MIXER_NONE);
     if(!caps.mixer_ok)
-        printf(" Mixer: not verified, watermarking\n");
+        printf(" Mixer: not verified%s, watermarking\n", cfg.port == -1 ? " (no BLASTER)" : "");
 
     if (!vsync_calibrate(&hz)) {
         printf("No usable vertical retrace (VGA required), measured %.2f Hz\n", hz);
@@ -277,19 +301,14 @@ int main(int argc, char *argv[]) {
         return EXIT_NO_VGA;
     }
 
-    if (!game_blaster)
+    /* No BLASTER so the PCM sections play fillers */
+    if (!game_blaster && cfg.port != -1)
         caps.pcm = pcm_init(&cfg, hz, !cms_mode);
     if (pcm_irq_mismatch())
         return EXIT_BAD_IRQ;
 
-    main_probe_fm(&caps);
-
     if (cms_mode) {
         /* Sync comes from FM, or from CMS on a Game Blaster */
-        if (caps.fm == CAPS_FM_NONE && caps.cms == CMS_NONE) {
-            printf(" CMS sequence: no FM or CMS to sync with\n");
-            return EXIT_NO_FM;
-        }
         if (caps.pcm) {
             caps.adpcm = pcm_adpcm_probe();
             printf(" PCM: 8-bit mono, %s\n", caps.adpcm ? "ADPCM 4, 2.6 and 2-bit"
@@ -301,20 +320,20 @@ int main(int argc, char *argv[]) {
                caps.pcm ? "plays" : "filler",
                caps.adpcm ? "plays" : "filler",
                caps.fm != CAPS_FM_NONE ? "FM" : "CMS");
-        main_crystal_unity(&caps, set_mixer, (uint16_t)cfg.port);
+        if (set_mixer && caps.sbpro_compatible)
+            cards_before_play((uint16_t)cfg.port);
         printf("Playing MDFourier CMS...\n");
         result = sb2seq_run(&caps);
     } else {
-        if (caps.fm == CAPS_FM_NONE)
-            return EXIT_NO_FM;
-        main_crystal_unity(&caps, set_mixer, (uint16_t)cfg.port);
+        if (set_mixer && caps.sbpro_compatible)
+            cards_before_play((uint16_t)cfg.port);
         printf("Playing MDFourier...\n");
         result = mdf_run_full_test(&caps);
     }
 
     /* silence the chip */
     if (caps.fm != CAPS_FM_NONE)
-        opl_driver.reset();
+        opl_reset();
 
     if (result == SEQ_ABORTED)
         return EXIT_ABORTED;
@@ -325,25 +344,38 @@ int main(int argc, char *argv[]) {
 
 /* OPL2/OPL3 at 0x388, set up for the sequence when found */
 void main_probe_fm(caps_t *caps) {
-    printf(" FM: Probing (%s)... ", opl_driver.name);
-    if (!opl_driver.detect()) {
-        printf("not found\n");
+    printf(" FM: Probing (OPL2/3 FM)... ");
+    if (!opl_detect()) {
+        printf("not found at 0x%03X\n", opl_port);
         return;
     }
     caps->fm = opl_is_opl3() ? CAPS_FM_OPL3 : CAPS_FM_OPL2;
     printf("found (%s)\n", caps->fm == CAPS_FM_OPL3 ? "OPL3" : "OPL2");
-    opl_driver.init();
+    opl_init();
 
     /* OPL3 and compatibles */
     if (caps->fm == CAPS_FM_OPL3)
         opl3_set_new_mode(1);
 }
 
-/* A Crystal codec turns SB FM 7 into +12 dB on its wavetable port, we set
- * it to 0 dB. After the setup's last DSP command, which would undo it */
-void main_crystal_unity(caps_t *caps, int set_mixer, uint16_t sb_base) {
-    if (set_mixer && caps->sbpro_compatible)
-        crystal_synth_unity(sb_base);
+/* Nothing gives the sync: why, and what to check. Nothing answering at
+ * all is usually a Plug and Play card not set up yet */
+void main_nothing_to_play(caps_t *caps, blaster_cfg_t *cfg, int cms_mode) {
+    printf("Nothing to play: no FM%s for the sync", cms_mode ? " or CMS" : "");
+    if (cfg->port == -1)
+        printf(", no BLASTER for PCM");
+    else if (!caps->dsp)
+        printf(", no DSP at 0x%03X", cfg->port);
+    printf(".\n");
+
+    if (!caps->dsp)
+        printf("  Plug and Play cards need their setup utility before MDF.\n");
+    if (cfg->port == -1)
+        printf("  Then set BLASTER as the card is configured, e.g. SET BLASTER=A220 I5 D1 T4\n");
+    else if (!caps->dsp)
+        printf("  Check BLASTER A against the card's settings\n");
+    else
+        printf("  Check that the card's FM is enabled%s\n", cms_mode ? "" : ", or use /C with a CMS card");
 }
 
 /* /T: 30 s of frames, no sound, to see how the timing holds. Under

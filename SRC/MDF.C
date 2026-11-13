@@ -4,6 +4,7 @@
 #include "fmblk.h"
 #include "pcmblk.h"
 #include "pcm.h"
+#include "mixer.h"
 
 /*
  * TIMING
@@ -27,6 +28,8 @@
 #define PCMIDLE_FRAMES  20
 #define PCMSINE_FRAMES  10
 #define PCMLEVEL_FRAMES 20
+#define PHSCLK_FRAMES   60      /* 8-bit mono, high-speed */
+#define PHSSINE_FRAMES  10
 #define PSCLK_FRAMES    60      /* 8-bit stereo */
 #define PSSEP_FRAMES    20
 #define P16CLK_FRAMES   60      /* 16-bit stereo */
@@ -46,7 +49,8 @@ typedef enum {
     PREP_SINE,          /* sweep sine */
     PREP_DEPTH,         /* FM depth: modulator level */
     PREP_FEEDBACK,      /* feedback steps */
-    PREP_PCM_CLOCK      /* PCM rate and DMA for the clock tone */
+    PREP_PCM_CLOCK,     /* PCM rate and DMA for the clock tone */
+    PREP_PCM_HS_CLOCK   /* the same in high-speed mode */
 } prep_t;
 
 void mdf_gap(unsigned frames, prep_t prep) {
@@ -78,6 +82,9 @@ void mdf_gap(unsigned frames, prep_t prep) {
         case PREP_PCM_CLOCK:
             pcm_clock_arm(PCMCLK_FRAMES);
             break;
+        case PREP_PCM_HS_CLOCK:
+            pcm_hs_clock_arm(PHSCLK_FRAMES);
+            break;
         case PREP_NONE:
             break;
     }
@@ -89,12 +96,32 @@ void mdf_gap(unsigned frames, prep_t prep) {
  * MDFourier skips those types when their clock block has no tone */
 #define FILLER_DECAY    10
 
+/* The FM filler for a section's frames, off FILLER_DECAY before its end */
+void mdf_filler(unsigned frames) {
+    unsigned frame;
+
+    if (seq_stopped())
+        return;
+
+    seq_add_frames(frames);
+    fmblk_filler_on();
+    for (frame = 0; frame < frames; frame++) {
+        if (frame + FILLER_DECAY == frames)
+            fmblk_filler_off();
+        if (!seq_frame())
+            break;
+    }
+    fmblk_filler_off();
+}
+
+/* A clock block the card can't play stays silent, the others get the filler */
 void mdf_pcmx_steps(pcmx_kind_t kind, unsigned steps, unsigned frames, int next_kind) {
     unsigned step, frame;
-    int      filler = !pcmx_enabled(kind) && kind != PCMX_CLK8 && kind != PCMX_CLK16;
 
-    if (filler && !seq_stopped())
-        fmblk_filler_on();
+    if (!pcmx_enabled(kind) && kind != PCMX_CLK8 && kind != PCMX_CLK16) {
+        mdf_filler(steps * frames);
+        return;
+    }
 
     for (step = 0; step < steps && !seq_stopped(); step++) {
         seq_add_frames(frames);
@@ -103,17 +130,28 @@ void mdf_pcmx_steps(pcmx_kind_t kind, unsigned steps, unsigned frames, int next_
             pcmx_step_fill(kind, step + 1);
         else if (next_kind >= 0)
             pcmx_step_fill((pcmx_kind_t)next_kind, 0);
-        for (frame = 0; frame < frames; frame++) {
-            if (filler && step + 1 == steps && frame + FILLER_DECAY == frames)
-                fmblk_filler_off();
+        for (frame = 0; frame < frames; frame++)
             if (!seq_frame())
                 break;
-        }
     }
-    if (filler)
-        fmblk_filler_off();
     if (next_kind < 0)
         pcmx_steps_end(kind);
+}
+
+/* High-speed steps, or the filler on a card without high-speed mode.
+ * Its clock block stays silent, so MDFourier skips the section */
+void mdf_pcm_hs_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
+    if (pcm_hs_enabled())
+        pcmblk_steps(kind, steps, frames);
+    else
+        mdf_filler(steps * frames);
+}
+
+/* The SB Pro output filter switched in silence, at the start of a gap,
+ * so whatever the switch does settles before the next tone */
+void mdf_filter(int on) {
+    if (!seq_stopped())
+        mixer_sbpro_filter(on);
 }
 
 int mdf_end_sequence() {
@@ -200,6 +238,28 @@ int mdf_run_full_test(caps_t *caps) {
     pcm_step_fill(PCM_LEVEL, 0, 0, PCMLEVEL_FRAMES);
     mdf_gap(SILENCE_FRAMES, PREP_NONE);
     pcmblk_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
+
+    /* PCMSINE's upper half again, SB Pro output filter off. The same
+     * type in the profile, so MDFourier overlays both */
+    pcm_step_fill(PCM_SWEEP_NF, 0, 0, PCMSINE_FRAMES);
+    mdf_filter(0);
+    mdf_gap(SILENCE_FRAMES, PREP_NONE);
+    pcmblk_steps(PCM_SWEEP_NF, PCM_NF_STEPS, PCMSINE_FRAMES);
+    mdf_filter(1);
+
+    /* PCM 8-bit mono, high-speed: DSP 2.01 and later, filler elsewhere */
+    mdf_gap(SILENCE_FRAMES, PREP_PCM_HS_CLOCK);
+    pcmblk_clock(PHSCLK_FRAMES);
+    pcm_step_fill(PCM_HS_SWEEP, 0, 0, PHSSINE_FRAMES);
+    mdf_gap(SILENCE_FRAMES, PREP_NONE);
+    mdf_pcm_hs_steps(PCM_HS_SWEEP, PCM_HS_SWEEP_STEPS, PHSSINE_FRAMES);
+
+    /* Its upper half again, filter off */
+    pcm_step_fill(PCM_HS_SWEEP_NF, 0, 0, PHSSINE_FRAMES);
+    mdf_filter(0);
+    mdf_gap(SILENCE_FRAMES, PREP_NONE);
+    mdf_pcm_hs_steps(PCM_HS_SWEEP_NF, PCM_NF_STEPS, PHSSINE_FRAMES);
+    mdf_filter(1);
 
     /* PCM 8-bit stereo: DSP 3.xx and 4.xx, filler on older cards */
     if (!seq_stopped())

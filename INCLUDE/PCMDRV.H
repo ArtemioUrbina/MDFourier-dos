@@ -28,6 +28,16 @@ void pcm_recover();
 /* len bytes, within one 64 KB page */
 void dma_program(uint8_t channel, void __far *buf, uint16_t len, uint8_t mode);
 void dma_mask(uint8_t channel);
+/* Bytes left to transfer, minus 1: 0xFFFF once all went */
+uint16_t dma_count_left(uint8_t channel);
+
+/* Second 8237, channels 5-7. It moves 16-bit words: addresses are in
+ * words (physical / 2) within 128 KB pages, page register bit 0 unused */
+#define DMA16_MASK      0xD4
+#define DMA16_MODE      0xD6
+#define DMA16_FLIPFLOP  0xD8
+/* words 16-bit words, within one 128 KB page */
+void dma16_program(uint8_t high_channel, void __far *buf, uint16_t words, uint8_t mode);
 
 /* ---- 8259 ---- */
 #define PIC1_CMD        0x20

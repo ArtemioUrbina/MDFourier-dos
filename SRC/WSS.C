@@ -1,10 +1,15 @@
 /*
- * WSS codec, 16-bit stereo on SB Pro compatibles with one (OPL3-SAx)
+ * WSS codec, 16-bit stereo on SB Pro compatibles with one (OPL3-SAx,
+ * Crystal CS4236/CS4237B)
  *
  * The Yamaha OPL3-SAx has a DSP 3.01 for Sound Blaster Pro and next to
  * it a Windows Sound System codec (AD1848/CS4231 compatible), which is
- * what Windows plays 16-bit through. Pots are usually 530h. SAX.C
+ * what Windows plays 16-bit through. Ports are usually 530h. SAX.C
  * finds it and its settings, this plays through it.
+ *
+ * A Crystal CS4236/CS4237B (Orpheus II) has the same codec registers,
+ * found by CRYSTAL.C, sharing the SB side's IRQ and DMA. MAIN.C hands
+ * it here with BLASTER I and D.
  *
  * Registers are indexed: the index at base+4, the data at base+5.
  *

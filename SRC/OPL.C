@@ -126,11 +126,3 @@ void opl_init() {
 void opl_reset() {
     opl_init();
 }
-
-fm_driver_t opl_driver = {
-    "OPL2/3 FM",
-    opl_detect,
-    opl_init,
-    opl_write,
-    opl_reset
-};

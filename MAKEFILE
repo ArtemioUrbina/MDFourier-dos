@@ -12,11 +12,11 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\wss.h include\sax.h include\host.h include\caps.h include\crystal.h include\cms.h include\cmsblk.h include\sb2seq.h include\seq.h include\fmblk.h include\pcmblk.h &
+       include\mixer.h include\pcmdrv.h include\pcmint.h include\wss.h include\sax.h include\host.h include\caps.h include\crystal.h include\cms.h include\cmsblk.h include\sb2seq.h include\seq.h include\fmblk.h include\pcmblk.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\dsp.obj build\pcm.obj build\ess.obj build\wss.obj build\crystal.obj build\sax.obj build\host.obj build\cms.obj build\cmsblk.obj build\sb2seq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\cards.obj build\dsp.obj build\pcm.obj build\pcmx.obj build\adpcm.obj build\irq.obj build\dma.obj build\ess.obj build\wss.obj build\crystal.obj build\sax.obj build\host.obj build\cms.obj build\cmsblk.obj build\sb2seq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
@@ -67,8 +67,23 @@ build\pcmblk.obj: src\pcmblk.c $(HDRS)
 build\dsp.obj: src\dsp.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\dsp.c
 
+build\cards.obj: src\cards.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\cards.c
+
 build\pcm.obj: src\pcm.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\pcm.c
+
+build\pcmx.obj: src\pcmx.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\pcmx.c
+
+build\adpcm.obj: src\adpcm.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\adpcm.c
+
+build\irq.obj: src\irq.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\irq.c
+
+build\dma.obj: src\dma.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\dma.c
 
 build\ess.obj: src\ess.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\ess.c

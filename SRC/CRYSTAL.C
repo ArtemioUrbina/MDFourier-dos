@@ -20,9 +20,10 @@
  * CS4237B and its revision. When the codec is not in MODE 3 we raise it
  * for the X registers, and put the mode back.
  *
- * /V prints its levels. Unless /K is given, the wavetable port, where
- * the Orpheus II's YMF289 comes in, is set to 0 dB right before playing
- * (see crystal_synth_unity()), the rest is left as the card set it.
+ * /V prints its levels and SRS 3D. Unless /K is given, SRS 3D is turned
+ * off with the mixer setup (crystal_srs_off()) and the wavetable port,
+ * where the Orpheus II's YMF289 comes in, is set to 0 dB right before
+ * playing (crystal_synth_unity()), the rest is left as the card set it.
  *
  * The Global Status register at CTRLbase+7 tells the context, bit 7
  * set for WSS and clear for SB. CTRLbase is its own Plug and Play
@@ -40,6 +41,8 @@
 #include "env.h"
 #include "mixer.h"
 #include "pit.h"
+#include "wss.h"
+#include "carddrv.h"
 
 #define CRYSTAL_R0          0
 #define CRYSTAL_R1          1
@@ -74,6 +77,11 @@
 #define CRYSTAL_CTRL_DATA   4
 #define CRYSTAL_CTRL_STATUS 7       /* Global Status, bit 7 CWSS */
 #define CRYSTAL_C1          1       /* chip version and ID, same as X25 */
+#define CRYSTAL_C2          2       /* SRS space bits 7-4, center bits 3-0, 1.5 dB steps */
+#define CRYSTAL_C3          3       /* bit 7 3DEN, bit 6 3DM, bit 5 3DSO, the rest reserved */
+#define CRYSTAL_3DEN        0x80    /* SRS 3D on */
+#define CRYSTAL_3DM         0x40    /* SRS mono-to-stereo on */
+#define CRYSTAL_3DSO        0x20    /* serial output from the SRS DSP, not heard */
 #define CRYSTAL_CWSS        0x80
 
 #define CRYSTAL_SB_MASTER   0x22    /* SB Pro mixer master, read to touch the SB side */
@@ -196,16 +204,41 @@ int crystal_mode_number(uint8_t i12) {
 /* CTRLbase+7 as read before the codec was touched */
 uint8_t crystal_status_first;
 
+/* Control indirect registers C0-C8: the index at CTRLbase+3, the data at
+ * +4. The index is put back as it was */
+uint8_t crystal_ctrl_in(uint16_t ctrl, uint8_t reg) {
+    uint8_t index = (uint8_t)(inp(ctrl + CRYSTAL_CTRL_INDEX) & 0x0F);
+    uint8_t val;
+
+    outp(ctrl + CRYSTAL_CTRL_INDEX, reg);
+    val = (uint8_t)inp(ctrl + CRYSTAL_CTRL_DATA);
+    outp(ctrl + CRYSTAL_CTRL_INDEX, index);
+    return val;
+}
+
+void crystal_ctrl_out(uint16_t ctrl, uint8_t reg, uint8_t val) {
+    uint8_t index = (uint8_t)(inp(ctrl + CRYSTAL_CTRL_INDEX) & 0x0F);
+
+    outp(ctrl + CRYSTAL_CTRL_INDEX, reg);
+    outp(ctrl + CRYSTAL_CTRL_DATA, val);
+    outp(ctrl + CRYSTAL_CTRL_INDEX, index);
+}
+
 /* The Control device at WSSbase+4, if its C1 reads the chip ID X25 has */
 int crystal_ctrl_found() {
-    uint16_t ctrl = (uint16_t)(crystal_base + CRYSTAL_CTRL_OFFSET);
-    uint8_t  index, c1;
+    return crystal_ctrl_in((uint16_t)(crystal_base + CRYSTAL_CTRL_OFFSET), CRYSTAL_C1) ==
+           crystal_xreg[CRYSTAL_X25];
+}
 
-    index = (uint8_t)(inp(ctrl + CRYSTAL_CTRL_INDEX) & 0x0F);
-    outp(ctrl + CRYSTAL_CTRL_INDEX, CRYSTAL_C1);
-    c1 = (uint8_t)inp(ctrl + CRYSTAL_CTRL_DATA);
-    outp(ctrl + CRYSTAL_CTRL_INDEX, index);
-    return c1 == crystal_xreg[CRYSTAL_X25];
+/* SRS 3D: on/off, mono-to-stereo, and its space and center gains, from
+ * 0 dB down in 1.5 dB steps */
+void crystal_print_srs(uint16_t ctrl) {
+    uint8_t c2 = crystal_ctrl_in(ctrl, CRYSTAL_C2);
+    uint8_t c3 = crystal_ctrl_in(ctrl, CRYSTAL_C3);
+
+    printf(" Codec: SRS 3D %s%s, space %+.1f dB, center %+.1f dB (C2 %02Xh C3 %02Xh)\n",
+           (c3 & CRYSTAL_3DEN) ? "on" : "off", (c3 & CRYSTAL_3DM) ? ", mono-to-stereo on" : "",
+           -1.5 * (c2 >> 4), -1.5 * (c2 & 0x0F), c2, c3);
 }
 
 char *crystal_context(uint8_t status) {
@@ -234,6 +267,7 @@ void crystal_report_context(uint16_t sb_base) {
         printf(",\n        %s after an SB mixer read", crystal_context((uint8_t)inp(ctrl + CRYSTAL_CTRL_STATUS)));
     }
     printf("\n");
+    crystal_print_srs(ctrl);
 }
 
 /* ---- Report ---- */
@@ -245,8 +279,8 @@ void crystal_print_levels() {
     int     i;
 
     printf("        X4 %02Xh: internal FM %s, FM remap %s, wavetable remap %s\n", x4,
-           ifm ? "on" : "off", fm_remap ? "on (I18/I19 to X6/X7)" : "off",
-           (x4 & CRYSTAL_WTRMD) ? "disabled" : "enabled if WTEN");
+           ifm ? "on" : "off", fm_remap ? "to X6/X7" : "off",
+           (x4 & CRYSTAL_WTRMD) ? "off" : "if WTEN");
 
     /* With internal FM on, I6/I7 are the PC wave level and X14/X15 the master */
     if (ifm) {
@@ -338,14 +372,17 @@ void crystal_close() {
 /* Where the codec is, looked for once. 0 if none */
 unsigned crystal_port;
 int      crystal_searched;
+int      crystal_searched_report;   /* the search said why each port wasn't one */
 
 unsigned crystal_find(int report) {
     unsigned i;
 
-    if (crystal_searched)
+    /* A quiet search found none: again, to say why */
+    if (crystal_searched && (crystal_port || crystal_searched_report || !report))
         return crystal_port;
 
     crystal_searched = 1;
+    crystal_searched_report = report;
     for (i = 0; i < CRYSTAL_PORT_COUNT; i++) {
         /* The context before the codec is touched */
         crystal_status_first = (uint8_t)inp(crystal_ports[i] + CRYSTAL_CTRL_OFFSET + CRYSTAL_CTRL_STATUS);
@@ -357,6 +394,16 @@ unsigned crystal_find(int report) {
     }
 
     return crystal_port;
+}
+
+int crystal_is_cs4237b() {
+    uint8_t x25;
+
+    if (!crystal_find(0) || !crystal_open(crystal_port, 0))
+        return 0;
+    x25 = crystal_x_in(CRYSTAL_X25);
+    crystal_close();
+    return x25 && (x25 & CRYSTAL_CID_MASK) == CRYSTAL_CID_CS4237B;
 }
 
 /* ---- Report ---- */
@@ -376,7 +423,7 @@ unsigned crystal_check(uint16_t sb_base) {
     printf(" Codec: Crystal %s (X25 %02Xh) at 0x%03X, MODE %d%s\n",
            crystal_chip_name(crystal_xreg[CRYSTAL_X25]), crystal_xreg[CRYSTAL_X25], crystal_port,
            crystal_mode_number(crystal_saved_i12),
-           crystal_mode_number(crystal_saved_i12) < 3 ? ", raised to MODE 3 to read and put back" : "");
+           crystal_mode_number(crystal_saved_i12) < 3 ? " (MODE 3 to read)" : "");
     crystal_print_levels();
     crystal_report_context(sb_base);
     return crystal_port;
@@ -399,8 +446,9 @@ unsigned crystal_check(uint16_t sb_base) {
  * command (reset, speaker, time constant), not on SB mixer or FM
  * writes. So we write it right before playing, after the last setup
  * command: the FM sections hold it, the PCM sections put the SB level
- * back after them. The codec is left alone during the sequence, any
- * access moves the card to WSS mode */
+ * back after them. Apart from the 16-bit section, which plays through
+ * it, the codec is left alone during the sequence: any access moves the
+ * card to WSS mode */
 #define CRYSTAL_X16         16
 #define CRYSTAL_X17         17
 #define CRYSTAL_WT_KEEP     0xC0    /* mute and the reserved bit */
@@ -469,3 +517,122 @@ void crystal_synth_unity(uint16_t sb_base) {
         printf(" Codec: wavetable port written to 0 dB, the card set it back to %+.1f/%+.1f dB\n",
                crystal_db_wavetable(left), crystal_db_wavetable(right));
 }
+
+/* ---- SRS 3D off for capture ---- */
+
+/* SRS 3D (C3 3DEN, and 3DM for mono-to-stereo) processes the output: it
+ * spreads one-channel sounds into both channels, lifts them and the
+ * highs, and raises the noise floor (measured on an Orpheus II). It sits
+ * in the Control device, not behind the SB mixer. Unless /K, we turn it
+ * off with the mixer setup and put it back at exit, as with the ESS and
+ * OPL3-SAx 3D */
+uint16_t crystal_ctrl;
+int      crystal_ctrl_searched;
+int      crystal_srs_saved;
+uint8_t  crystal_srs_c3;
+
+/* The Control device, accepted when its C1 reads the chip ID X25 has. 0 if none */
+uint16_t crystal_find_ctrl() {
+    uint16_t ctrl;
+    uint8_t  x25;
+
+    if (crystal_ctrl_searched)
+        return crystal_ctrl;
+    crystal_ctrl_searched = 1;
+
+    if (!crystal_find(verbose) || !crystal_open(crystal_port, 0))
+        return 0;
+    x25 = crystal_x_in(CRYSTAL_X25);
+    crystal_close();
+
+    ctrl = (uint16_t)(crystal_port + CRYSTAL_CTRL_OFFSET);
+    if (x25 && crystal_ctrl_in(ctrl, CRYSTAL_C1) == x25)
+        crystal_ctrl = ctrl;
+    return crystal_ctrl;
+}
+
+void crystal_srs_restore() {
+    if (!crystal_srs_saved)
+        return;
+    crystal_ctrl_out(crystal_ctrl, CRYSTAL_C3,
+                     (uint8_t)(crystal_srs_c3 & (CRYSTAL_3DEN | CRYSTAL_3DM | CRYSTAL_3DSO)));
+    crystal_srs_saved = 0;
+}
+
+void crystal_srs_off() {
+    uint8_t c3;
+
+    if (!crystal_find_ctrl())
+        return;
+    c3 = crystal_ctrl_in(crystal_ctrl, CRYSTAL_C3);
+    if (!(c3 & (CRYSTAL_3DEN | CRYSTAL_3DM)))
+        return;
+
+    crystal_srs_c3    = c3;
+    crystal_srs_saved = 1;
+    atexit(crystal_srs_restore);
+    crystal_ctrl_out(crystal_ctrl, CRYSTAL_C3, (uint8_t)(c3 & CRYSTAL_3DSO));
+    printf(" Codec: SRS 3D off for capture, back on at exit\n");
+}
+
+int crystal_srs_on() {
+    if (!crystal_find_ctrl())
+        return 0;
+    return (crystal_ctrl_in(crystal_ctrl, CRYSTAL_C3) & (CRYSTAL_3DEN | CRYSTAL_3DM)) != 0;
+}
+
+/* ---- The card ---- */
+
+/* The codec plays 16-bit as a WSS codec, its registers 4 above the WSS
+ * base WSS.C works from, on the IRQ and DMA it shares with the SB side:
+ * BLASTER I and D. /W:OFF leaves it out, /W:port,irq,dma at that base
+ * gives them by hand */
+#define CRYSTAL_WSS_OFFSET  4
+
+void crystal_detect(blaster_cfg_t *cfg) {
+    unsigned codec = crystal_find(verbose);
+    unsigned base;
+
+    if (!codec || wss_in_use() || env_wss_cfg.mode == WSS_OFF)
+        return;
+
+    base = codec - CRYSTAL_WSS_OFFSET;
+    if (env_wss_cfg.mode == WSS_MANUAL) {
+        if (env_wss_cfg.port != base)
+            return;
+        wss_use(base, (uint8_t)env_wss_cfg.irq, (uint8_t)env_wss_cfg.dma);
+    } else {
+        if (cfg->irq < 2 || cfg->dma < 0)
+            return;
+        wss_use(base, (uint8_t)(cfg->irq == 2 ? 9 : cfg->irq), (uint8_t)cfg->dma);
+    }
+
+    if (verbose)
+        printf(" PCM 16-bit: Crystal codec at 0x%03X, IRQ and DMA shared with the SB side\n", codec);
+}
+
+/* A CS4237B keeps the SB Pro output filter bit, with no filter behind
+ * it on the Orpheus II: the mixer doesn't warn about it. Measured on
+ * that chip only, other Crystal chips warn */
+void crystal_mixer_notes() {
+    if (crystal_is_cs4237b())
+        mixer_sbpro_filter_unused();
+}
+
+void crystal_report(uint16_t sb_base) {
+    crystal_check(sb_base);
+}
+
+card_t crystal_card = {
+    "Crystal CS4236/CS4237B",
+    crystal_detect,
+    NULL,               /* needs_config: it plays 16-bit without /W */
+    crystal_mixer_notes,
+    NULL,               /* mixer_set: the card maps the SB mixer itself */
+    crystal_srs_off,
+    NULL,               /* mixer_report: crystal_report() shows its levels */
+    crystal_srs_on,
+    "Crystal SRS 3D on, alters the output",
+    crystal_report,
+    crystal_synth_unity /* the FM chip's wavetable port to 0 dB */
+};

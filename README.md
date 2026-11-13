@@ -7,21 +7,21 @@ Pure DOS is the reference. A Windows 3.x/9x DOS box also works, with looser timi
 It detects and plays using:
 
 - **FM**: OPL2, OPL3 and OPL3 clones (OPL3-SAx, ESS ESFM)
-- **PCM 8-bit mono**: any Sound Blaster DSP, 1.xx and up
+- **PCM 8-bit mono**: any Sound Blaster DSP, 1.xx and up; at 44 kHz in high-speed mode on DSP 2.01 and up
 - **ADPCM 4, 2.6 and 2-bit**: Creative DSPs 1.xx to 4.xx, in the CMS sequence; probed first, clones may not have it
 - **PCM 8-bit stereo**: DSP 3.xx and 4.xx
-- **PCM 16-bit stereo**: DSP 4.xx, ESS ES18xx in Extended mode, and the WSS codec of the OPL3-SAx (`/W`)
+- **PCM 16-bit stereo**: DSP 4.xx, ESS ES18xx in Extended mode, the WSS codec of the OPL3-SAx (`/W`), and Crystal CS4236/CS4237B codecs (Orpheus II)
 - **CMS**: Game Blaster, or the CMS chips on a Sound Blaster 1.x/2.0 (`/C`)
 
 Where a card can't play a section, a filler takes its place so the sequence keeps the same timing on every card. The mixer is set for capture and restored at exit. 
 
-On a Crystal CS4236/CS4237B codec (Orpheus II) the card turns SB FM 7 into +12 dB on the codec's wavetable port, where the Orpheus II's YMF289 comes in, and 0 dB on the Crystal FM. MDF sets the wavetable port to 0 dB right before playing and puts it back at exit. The card writes its SB levels back on every DSP command, so the FM sections play at 0 dB and the PCM sections leave it at the SB level. `/K` leaves it as it is.
+On Crystal CS4236/CS4237B codecs (Orpheus II and others), MDF sets the codec's FM synth input to 0 dB and turns SRS 3D off for the capture, and restores both at exit. `/K` leaves them as they are; a capture with SRS on is marked as unverified.
 
 ## Sequences
 
 | Sequence | Option | Contents | Length at 70 Hz |
 |---|---|---|---:|
-| FM and PCM | none | sync, chip ID, FM sweeps and steps, PCM mono, stereo and 16-bit | ~101 s |
+| FM and PCM | none | sync, chip ID, FM sweeps and steps, PCM mono and high-speed mono with and without the SB Pro output filter, stereo and 16-bit | ~122 s |
 | CMS | `/C` | sync from FM, or CMS on a Game Blaster; FM chip ID, sweep and levels; CMS notes, levels, voices, separation, noise, envelopes; ADPCM 4, 2.6 and 2-bit; PCM 8-bit mono | ~95 s |
 
 ## Usage
@@ -35,7 +35,7 @@ MDF [/C[:port]] [/K] [/R] [/T] [/V] [/W:AUTO | /W:OFF | /W:port,irq,dma]
 - `/R` print the mixer settings and exit
 - `/T` 30 s frame timing test without sound
 - `/V` verbose: BLASTER, mixer, DSP and IRQ details. On a Crystal CS4236/CS4237B codec (Orpheus II and other cards with one) also the codec's own levels, as the card translated the SB mixer into them, and whether it is in SB or WSS mode
-- `/W` 16-bit through a WSS codec: `AUTO`, `OFF` or set by hand
+- `/W` 16-bit through a WSS codec: `AUTO`, `OFF` or set by hand. A Crystal CS4236/CS4237B codec plays it without `/W`, on BLASTER's IRQ and DMA
 
 The `BLASTER` variable is needed for PCM and the mixer. Exit codes, for batch files:
 

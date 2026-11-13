@@ -20,6 +20,9 @@
 #define SBP_FM      0x26
 #define SBP_CD      0x28
 #define SBP_LINE    0x2E
+#define SBP_OUT     0x0E        /* output control, bit 5 filter off, bit 1 stereo */
+#define SBP_OUT_FILTER_OFF 0x20
+#define SBP_OUT_STEREO     0x02
 
 /* SB16 (CT1745) registers: volumes in bits 7-3, 31 = 0 dB, 2 dB steps */
 #define SB16_MASTER 0x30        /* L, R at +1 */
@@ -87,6 +90,15 @@ mix_std_t mixer_sbpro_std[] = {
     { SBP_CD,          0xFF, 0x00, 0xEE },  /* muted */
     { SBP_LINE,        0xFF, 0x00, 0xEE },
     { SBP_MIC,         0x06, 0x00, 0x06 }
+};
+
+/* Output filter on and mono, the power-on state. A DSP reset leaves
+ * them as the last program did, and both change the 8-bit mono tones:
+ * the filter their high end, the stereo bit sends samples to left and
+ * right in turn. Set only where the filter bit holds what is written.
+ * The stereo section turns them its way and back, PCM.C */
+mix_std_t mixer_sbpro_out_std[] = {
+    { SBP_OUT,         0x22, 0x00, 0x22 }
 };
 
 /* In ESS set the extended registers, after the SB Pro view */
@@ -241,10 +253,92 @@ int mixer_report_sb16(uint16_t base) {
     return MIXER_WARN;
 }
 
+int mixer_sbpro_has_out(uint16_t base) {
+    return mix_present(base, SBP_OUT, SBP_OUT_FILTER_OFF);
+}
+
+/* A card that keeps the filter bit without a filter behind it: still
+ * set, shown, not a warning. Only the CS4237B: the Orpheus II plays the
+ * 8-bit tones the same with it on or off, measured. Other Crystal chips
+ * warn as any SB Pro until one is measured */
+int mixer_filter_unused;
+
+void mixer_sbpro_filter_unused() {
+    mixer_filter_unused = 1;
+}
+
+/* The bits that change the 8-bit mono tones on this card */
+int mixer_sbpro_out_bad(int out) {
+    if (out < 0)
+        return 0;
+    return out & (mixer_filter_unused ? SBP_OUT_STEREO : SBP_OUT_FILTER_OFF | SBP_OUT_STEREO);
+}
+
+/* MDF set 0Eh for capture: the unfiltered sweeps may switch the filter */
+uint16_t mixer_out_base;
+int      mixer_out_set;
+
+/* The unfiltered sweeps: filter off before them, back on after. Only
+ * where MDF set the mixer and the card holds the bit. Elsewhere they
+ * play as the other tones, the same filter state */
+void mixer_sbpro_filter(int on) {
+    uint8_t out;
+
+    if (!mixer_out_set)
+        return;
+    out = (uint8_t)(mix_read(mixer_out_base, SBP_OUT) & ~SBP_OUT_FILTER_OFF);
+    mix_write(mixer_out_base, SBP_OUT, (uint8_t)(on ? out : out | SBP_OUT_FILTER_OFF));
+}
+
+int mixer_sbpro_filter_switched() {
+    return mixer_out_set;
+}
+
+/* SB Pro stereo, DSP 3.xx: stereo on and the filter off, as Creative's
+ * guide plays it, on any card and with /K too. 0Eh goes back to what
+ * it was before the stereo section */
+uint16_t mixer_stereo_base;
+int      mixer_stereo_saved = -1;
+
+void mixer_sbpro_stereo_on(uint16_t base) {
+    mixer_stereo_base  = base;
+    mixer_stereo_saved = mix_read(base, SBP_OUT);
+    mix_write(base, SBP_OUT, (uint8_t)(mixer_stereo_saved | SBP_OUT_STEREO | SBP_OUT_FILTER_OFF));
+}
+
+void mixer_sbpro_stereo_off() {
+    if (mixer_stereo_saved >= 0) {
+        mix_write(mixer_stereo_base, SBP_OUT, (uint8_t)mixer_stereo_saved);
+        mixer_stereo_saved = -1;
+    }
+}
+
+/* Output control as found, -1 where it doesn't hold the filter bit */
+int mixer_sbpro_out(uint16_t base) {
+    return mixer_sbpro_has_out(base) ? mix_read(base, SBP_OUT) : -1;
+}
+
+/* With the other levels */
+void mixer_print_sbpro_out(int out) {
+    if (out >= 0)
+        printf("        output filter %s, %s%s\n", (out & SBP_OUT_FILTER_OFF) ? "off" : "on",
+               (out & SBP_OUT_STEREO) ? "stereo" : "mono",
+               mixer_filter_unused ? " (CS4237B: filter bit, no effect measured)" : "");
+}
+
+void mixer_warn_sbpro_out(int out) {
+    int bad = mixer_sbpro_out_bad(out);
+
+    if (bad & SBP_OUT_FILTER_OFF)
+        printf("  WARNING: output filter off, changes the 8-bit mono tones\n");
+    if (bad & SBP_OUT_STEREO)
+        printf("  WARNING: stereo bit set, 8-bit mono plays split left and right\n");
+}
+
 /* Only tested in DosBox */
 int mixer_report_sbpro(uint16_t base) {
     uint8_t mst, fm, voice, cd, line, mic;
-    int warn, low, other;
+    int warn, low, other, out;
 
     voice = mix_read(base, SBP_VOICE);
     mst  = mix_read(base, SBP_MASTER);
@@ -252,11 +346,12 @@ int mixer_report_sbpro(uint16_t base) {
     cd   = mix_read(base, SBP_CD);
     line = mix_read(base, SBP_LINE);
     mic  = (uint8_t)((mix_read(base, SBP_MIC) >> 1) & 0x03);
+    out  = mixer_sbpro_out(base);
 
     /* bits 4 and 0 are unused, 0xEE is max */
     low   = (mst & 0xEE) != 0xEE || (fm & 0xEE) != 0xEE || (voice & 0xEE) != 0xEE;
     other = (cd & 0xEE) || (line & 0xEE) || mic;
-    warn  = low || other;
+    warn  = low || other || mixer_sbpro_out_bad(out);
 
     if (verbose || warn) {
         printf(" Mixer: SB Pro master %u/%u FM %u/%u voice %u/%u (7 = 0 dB)\n",
@@ -264,12 +359,14 @@ int mixer_report_sbpro(uint16_t base) {
                voice >> 5, (voice >> 1) & 7);
         printf("        CD %u/%u line %u/%u (0 = -46 dB) mic %u/3\n",
                cd >> 5, (cd >> 1) & 7, line >> 5, (line >> 1) & 7, mic);
+        mixer_print_sbpro_out(out);
     }
 
     if (low)
         printf("  WARNING: master, FM or voice below max\n");
     if (other)
         printf("  WARNING: CD, line or mic not muted, adds noise\n");
+    mixer_warn_sbpro_out(out);
 
     if (!warn) {
         printf(" Mixer: SB Pro, OK for capture\n");
@@ -281,7 +378,7 @@ int mixer_report_sbpro(uint16_t base) {
 /* ESS extended registers, the SB Pro view hides mutes */
 int mixer_report_ess(uint16_t base) {
     uint8_t mstl, mstr, fm, voice, cd, line, mic, aux, mono, pcspk, mmix, d3;
-    int warn, low, other;
+    int warn, low, other, out;
 
     voice = mix_read(base, ESS_VOICE);
     mstl  = mix_read(base, ESS_MASTER);
@@ -295,18 +392,20 @@ int mixer_report_ess(uint16_t base) {
     pcspk = (uint8_t)(mix_read(base, ESS_PCSPK) & 0x07);
     mmix  = (uint8_t)(mix_read(base, ESS_MONOMIX) & 0x01);
     d3    = (uint8_t)(mix_read(base, ESS_3D) & 0x08);
+    out   = mixer_sbpro_out(base);
 
     low   = (mstl & 0x7F) != 0x3F || (mstr & 0x7F) != 0x3F;
     other = cd || line || mic || aux || mono || pcspk || mmix;
-    warn  = low || fm != 0x88 || voice != 0xEE || d3 || other;
+    warn  = low || fm != 0x88 || voice != 0xEE || d3 || other || mixer_sbpro_out_bad(out);
 
     if (verbose || warn) {
-        printf(" Mixer: ESS master %u/%u%s (63 = max) FM %u/%u (8 = 0 dB) voice %u/%u (14 = 0 dB)%s\n",
+        printf(" Mixer: ESS master %u/%u%s (63 = max) FM %u/%u voice %u/%u (8, 14 = 0 dB)\n",
                mstl & 0x3F, mstr & 0x3F, ((mstl | mstr) & 0x40) ? " muted" : "",
-               fm >> 4, fm & 0x0F, voice >> 4, voice & 0x0F, d3 ? ", 3-D on" : "");
-        printf("        CD %u/%u line %u/%u mic %u/%u aux %u/%u mono in %u/%u PC speaker %u\n",
+               fm >> 4, fm & 0x0F, voice >> 4, voice & 0x0F);
+        printf("        CD %u/%u line %u/%u mic %u/%u aux %u/%u mono in %u/%u PC speaker %u%s\n",
                cd >> 4, cd & 0x0F, line >> 4, line & 0x0F, mic >> 4, mic & 0x0F,
-               aux >> 4, aux & 0x0F, mono >> 4, mono & 0x0F, pcspk);
+               aux >> 4, aux & 0x0F, mono >> 4, mono & 0x0F, pcspk, d3 ? ", 3-D on" : "");
+        mixer_print_sbpro_out(out);
     }
 
     if (low)
@@ -321,6 +420,7 @@ int mixer_report_ess(uint16_t base) {
         printf("  WARNING: 3-D effect on, alters the output\n");
     if (other)
         printf("  WARNING: other inputs not muted, adds noise\n");
+    mixer_warn_sbpro_out(out);
 
     if (!warn) {
         printf(" Mixer: ESS, OK for capture\n");
@@ -332,8 +432,11 @@ int mixer_report_ess(uint16_t base) {
 int mixer_report(blaster_cfg_t *cfg) {
     uint16_t base;
 
-    if (cfg->port == -1 || cfg->type == -1) {
-        printf(" Mixer: check volumes manually\n");
+    /* No BLASTER */
+    if (cfg->port == -1)
+        return MIXER_UNKNOWN;
+    if (cfg->type == -1) {
+        printf(" Mixer: BLASTER has no T, check volumes manually\n");
         return MIXER_UNKNOWN;
     }
     base = (uint16_t)cfg->port;
@@ -409,6 +512,12 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
         mix_save(base, mixer_ess_std, COUNT(mixer_ess_std));
         ok = mix_set(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
         ok &= mix_set(base, mixer_ess_std, COUNT(mixer_ess_std));
+        if (mixer_sbpro_has_out(base)) {
+            mix_save(base, mixer_sbpro_out_std, COUNT(mixer_sbpro_out_std));
+            ok &= mix_set(base, mixer_sbpro_out_std, COUNT(mixer_sbpro_out_std));
+            mixer_out_base = base;
+            mixer_out_set  = 1;
+        }
         return ok;
     }
 
@@ -419,7 +528,14 @@ int mixer_set_standard(blaster_cfg_t *cfg) {
         if (!mix_present(base, SBP_VOICE, 0xEE))
             return -1;
         mix_save(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
-        return mix_set(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
+        ok = mix_set(base, mixer_sbpro_std, COUNT(mixer_sbpro_std));
+        if (mixer_sbpro_has_out(base)) {
+            mix_save(base, mixer_sbpro_out_std, COUNT(mixer_sbpro_out_std));
+            ok &= mix_set(base, mixer_sbpro_out_std, COUNT(mixer_sbpro_out_std));
+            mixer_out_base = base;
+            mixer_out_set  = 1;
+        }
+        return ok;
     case 6:
         if (!mix_present(base, SB16_VOICE, 0xF8))
             return -1;

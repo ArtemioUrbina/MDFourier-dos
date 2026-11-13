@@ -4,15 +4,24 @@
 #include <stdint.h>
 #include "env.h"
 
-/* 8-bit mono PCM, DSP 1.xx and up, 22222.2 Hz nominal (1 MHz / 45) */
+/* 8-bit mono PCM, DSP 1.xx and up, 22222.2 Hz nominal (1 MHz / 45).
+ * High-speed 8-bit mono, DSP 2.01 and up, 43478.3 Hz nominal (1 MHz / 23) */
 
 /* Sweep and level steps */
 #define PCM_SWEEP_STEPS 64      /* 20 Hz to 10 kHz, log spaced */
 #define PCM_LEVEL_STEPS 8       /* 0 to -42 dB in 6 dB steps */
+#define PCM_HS_SWEEP_STEPS 64   /* high-speed, 20 Hz to 20 kHz */
+/* The upper half of each sweep again, the same tones, played with the
+ * SB Pro output filter off. MDFourier overlays them on the sweep */
+#define PCM_NF_STEPS    32
 
 typedef enum {
     PCM_SWEEP,
-    PCM_LEVEL
+    PCM_LEVEL,
+    PCM_HS_SWEEP,               /* high-speed mode, main sequence only */
+    PCM_SWEEP_NF,               /* the upper PCM_NF_STEPS of each sweep */
+    PCM_HS_SWEEP_NF,
+    PCM_STEPS_COUNT
 } pcm_steps_t;
 
 /* Checks BLASTER A, I and D, resets the DSP, builds the tables and
@@ -20,7 +29,7 @@ typedef enum {
  * frame_hz sizes the tones to the blocks. extended: also sets up the
  * stereo and 16-bit ones, otherwise only 8-bit mono and ADPCM play */
 int  pcm_init(blaster_cfg_t *cfg, double frame_hz, int extended);
-/* pcm_init() saw the DSP raise another IRQ than BLASTER I: said so, stop */
+/* pcm_init() saw the DSP raise another IRQ than BLASTER I */
 int  pcm_irq_mismatch();
 
 /* Speaker on and the rate. At the start of the gap before the first
@@ -33,6 +42,11 @@ void pcm_prepare();
 void pcm_clock_arm(unsigned frames);
 void pcm_clock_start();
 void pcm_clock_stop();
+
+/* High-speed mode: 1 when the card plays it. The clock is armed the
+ * same way, then pcm_clock_start() and pcm_clock_stop() */
+int  pcm_hs_enabled();
+void pcm_hs_clock_arm(unsigned frames);
 
 /* One tone per step, single-cycle. Queue a step frames before it
  * plays, start each on a frame edge. buf alternates 0/1 */

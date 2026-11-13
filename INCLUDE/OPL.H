@@ -2,10 +2,13 @@
 #define OPL_H
 
 #include <stdint.h>
-#include "carddrv.h"
-
 /* AdLib/OPL2/OPL3 FM driver */
-extern fm_driver_t opl_driver;
+
+/* 1 if the timer test finds a chip at opl_port */
+int  opl_detect();
+/* Every register to a known value, notes off */
+void opl_init();
+void opl_reset();
 
 /* Adlib FM I/O port not in BLASTER */
 extern uint16_t opl_port;
