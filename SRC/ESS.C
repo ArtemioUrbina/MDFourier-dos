@@ -1,26 +1,10 @@
 /*
  * ESS ES18xx Extended mode, 16-bit stereo
- *
- * DSP 3.01 in compatibility mode only plays 16-bit stereo to 11 kHz.
- * Extended mode plays it to 48 kHz on the same 8-bit DMA channel, the
- * FIFO gets bytes: low, high, left channel, then the right one as
- * the data sheet says
- *
- * Its registers are written as command, value (0xA1 then the divider)
- * and read with 0xC0, register. The mono and 8-bit stereo blocks stay
- * in compatibility mode: the data sheet advises against mixing the two,
- * Extended mode starts at the 16-bit section with a reset and ends with
- * one in pcm_finish().
- *
- * One start plays a whole tone just like with the SB16: the 8237 loops the
- * buffer and the ES18xx counter reloads at each loop, one IRQ each.
- * Tones of more than one loop start in auto-initialize, and once the
- * IRQ of the next to last loop came, ess_poll() (once per frame) turns
- * auto-initialize off so the counter stops after the last one. A loop
- * is 93 ms or more, several frames to see it.
- *
- * From the ES1869 data sheet, "Extended Mode Audio 1 DAC Operation" and
- * the Audio 1 controller registers
+ * Compatibility mode plays 16-bit stereo only to 11 kHz, Extended mode to
+ * 48 kHz on the same 8-bit DMA. Mono and 8-bit stereo stay compatible,
+ * the data sheet says not to mix: Extended from the 16-bit section's
+ * reset to pcm_finish(). The counter reloads each loop, one IRQ each,
+ * ess_poll() turns auto-init off after the next to last one.
  * https://www.philscomputerlab.com/uploads/3/7/2/3/37231621/es1869techmanual.pdf
  */
 
@@ -44,23 +28,18 @@
 #define ESS_DAC_HOLD    0xB6    /* 0x00 sets up the DAC for signed data */
 #define ESS_CTRL1       0xB7    /* FIFO format */
 #define ESS_CTRL2       0xB8    /* bit 2 auto-initialize, bit 0 run */
-/* Transfer type, bits 1-0. The register table has 01 single, 10 and
- * 11 demand (2 and 4 bytes) and 00 reserved, the programming steps 00
- * single and 01 demand. 01 works either way: the 8237 in single mode
- * takes a byte per request and serves a demand request byte by byte */
+/* Transfer type: the data sheet's table and steps disagree, 01 works
+ * either way */
 #define ESS_XFER_TYPE   0xB9
 #define ESS_SINGLE      0x01
 
-/* 795.5 kHz / 18 = 44194 Hz by the data sheet, measured 44110.8 Hz:
- * the clock source runs at ~794.0 kHz */
+/* 44194 Hz by the data sheet, 44110.8 Hz measured */
 #define ESS_RATE_DIV    238
-/* Roll-off at ~80% of half the rate: 17677 Hz * 82 = 1.45 MHz,
- * 7.16 MHz / 5 = 1.432 MHz, 17.5 kHz */
+/* Roll-off ~17.5 kHz */
 #define ESS_FILTER_DIV  251
 #define ESS_IRQ_ON      0x50    /* bit 6 counter IRQ, bit 4 set, data sheet step 6 */
 #define ESS_DRQ_ON      0x50    /* bit 6 Extended mode DRQ, bit 4 set */
-/* Data sheet Table 16, stereo 16-bit signed: 0x71, then 0xBC
- * (FIFO on, signed, stereo, 16-bit) */
+/* Table 16, 16-bit signed stereo: 71h, then BCh */
 #define ESS_FMT_INIT    0x71
 #define ESS_FMT_S16ST   0xBC
 #define ESS_RUN         0x01
@@ -111,8 +90,8 @@ int ess_setup() {
     ess_write(ESS_CTRL1, ESS_FMT_S16ST);
     ess_write(ESS_IRQ_CTRL, ESS_IRQ_ON);
     ess_write(ESS_DRQ_CTRL, ESS_DRQ_ON);
-    /* The reset took the DAC off the mixer. The gap before the clock
-     * gives it the ~100 ms the data sheet asks for */
+    /* The reset took the DAC off the mixer, the gap gives it the ~100 ms
+     * the data sheet asks */
     dsp_write(sb_base, DSP_SPEAKER_ON);
 
     if (ess_read(ESS_RATE) != ESS_RATE_DIV)
@@ -126,7 +105,7 @@ void ess_print_info() {
     printf(" PCM 16-bit: stereo, 44111 Hz, ESS Extended mode, DMA %u\n", sb_dma);
 }
 
-/* Into Extended mode. A card that doesn't take it plays the filler as one without 16-bit */
+/* Into Extended mode, a card that doesn't take it plays fillers */
 char *ess_begin() {
     if (ess_setup())
         return NULL;

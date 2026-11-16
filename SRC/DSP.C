@@ -2,8 +2,8 @@
 #include "dsp.h"
 #include "pit.h"
 
-/* Sound Blaster DSP ports, relative to the BLASTER port.
- * Source: https://pdos.csail.mit.edu/6.828/2017/readings/hardware/SoundBlaster.pdf */
+/* SB DSP ports, relative to BLASTER A
+ * https://pdos.csail.mit.edu/6.828/2017/readings/hardware/SoundBlaster.pdf */
 #define DSP_RESET       0x06
 #define DSP_READ        0x0A
 #define DSP_WRITE       0x0C    /* bit 7 busy */

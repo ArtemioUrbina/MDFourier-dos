@@ -6,13 +6,8 @@
 #include "pcm.h"
 #include "mixer.h"
 
-/*
- * TIMING
- *
- * Every key-on / key-off in the measured sequence is issued right
- * after vsync_wait() returns, with nothing slow in between.
- *
- */
+/* TIMING: every key-on/key-off is sent right after vsync_wait() returns,
+ * nothing slow in between */
 
 #define SWEEP_FRAMES    20
 #define SILENCE_FRAMES  20
@@ -37,9 +32,8 @@
 #define P16LEVEL_FRAMES 20
 #define P16SEP_FRAMES   20
 
-
-/* What a silence loads in its last frame, so the next block's first
- * key-on lands right on a frame edge */
+/* What a silence loads in its last frame, so the next key-on lands on
+ * the frame edge */
 typedef enum {
     PREP_NONE,
     PREP_PULSES,        /* SINE, reference note, centered */
@@ -91,12 +85,11 @@ void mdf_gap(unsigned frames, prep_t prep) {
     seq_silence(1);
 }
 
-/* The stereo and 16-bit blocks a card can't play get a filler, so the
- * recording doesn't go quiet for ~15 s and look finished.
- * MDFourier skips those types when their clock block has no tone */
+/* Blocks a card can't play get a filler so the recording doesn't go
+ * quiet for ~15 s. MDFourier skips them when the clock has no tone */
 #define FILLER_DECAY    10
 
-/* The FM filler for a section's frames, off FILLER_DECAY before its end */
+/* FM filler, off FILLER_DECAY before the end */
 void mdf_filler(unsigned frames) {
     unsigned frame;
 
@@ -114,7 +107,8 @@ void mdf_filler(unsigned frames) {
     fmblk_filler_off();
 }
 
-/* A clock block the card can't play stays silent, the others get the filler */
+/* The clock block stays silent if the card can't play it, the rest
+ * gets the filler */
 void mdf_pcmx_steps(pcmx_kind_t kind, unsigned steps, unsigned frames, int next_kind) {
     unsigned step, frame;
 
@@ -138,8 +132,7 @@ void mdf_pcmx_steps(pcmx_kind_t kind, unsigned steps, unsigned frames, int next_
         pcmx_steps_end(kind);
 }
 
-/* High-speed steps, or the filler on a card without high-speed mode.
- * Its clock block stays silent, so MDFourier skips the section */
+/* High-speed steps, or the filler without high-speed */
 void mdf_pcm_hs_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
     if (pcm_hs_enabled())
         pcmblk_steps(kind, steps, frames);
@@ -147,8 +140,7 @@ void mdf_pcm_hs_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
         mdf_filler(steps * frames);
 }
 
-/* The SB Pro output filter switched in silence, at the start of a gap,
- * so whatever the switch does settles before the next tone */
+/* SB Pro filter switched at the start of a gap, so it settles */
 void mdf_filter(int on) {
     if (!seq_stopped())
         mixer_sbpro_filter(on);
@@ -239,8 +231,8 @@ int mdf_run_full_test(caps_t *caps) {
     mdf_gap(SILENCE_FRAMES, PREP_NONE);
     pcmblk_steps(PCM_LEVEL, PCM_LEVEL_STEPS, PCMLEVEL_FRAMES);
 
-    /* PCMSINE's upper half again, SB Pro output filter off. The same
-     * type in the profile, so MDFourier overlays both */
+    /* PCMSINE's upper half again, filter off, same type so MDFourier
+     * overlays both */
     pcm_step_fill(PCM_SWEEP_NF, 0, 0, PCMSINE_FRAMES);
     mdf_filter(0);
     mdf_gap(SILENCE_FRAMES, PREP_NONE);
@@ -268,7 +260,7 @@ int mdf_run_full_test(caps_t *caps) {
     mdf_pcmx_steps(PCMX_CLK8, 1, PSCLK_FRAMES, PCMX_SEP8);
     mdf_pcmx_steps(PCMX_SEP8, PCMX_SEP_STEPS, PSSEP_FRAMES, -1);
 
-    /* PCM 16-bit stereo: DSP 4.xx with BLASTER H and ESS Extended mode, filler elsewhere */
+    /* PCM 16-bit stereo: DSP 4.xx with H, ESS Extended, filler elsewhere */
     if (!seq_stopped())
         pcmx_begin16();
     mdf_gap(SILENCE_FRAMES, PREP_NONE);

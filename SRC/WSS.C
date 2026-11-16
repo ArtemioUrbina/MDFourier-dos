@@ -1,26 +1,11 @@
 /*
- * WSS codec, 16-bit stereo on SB Pro compatibles with one (OPL3-SAx,
- * Crystal CS4236/CS4237B)
- *
- * The Yamaha OPL3-SAx has a DSP 3.01 for Sound Blaster Pro and next to
- * it a Windows Sound System codec (AD1848/CS4231 compatible), which is
- * what Windows plays 16-bit through. Ports are usually 530h. SAX.C
- * finds it and its settings, this plays through it.
- *
- * A Crystal CS4236/CS4237B (Orpheus II) has the same codec registers,
- * found by CRYSTAL.C, sharing the SB side's IRQ and DMA. MAIN.C hands
- * it here with BLASTER I and D.
- *
- * Registers are indexed: the index at base+4, the data at base+5.
- *
- * The playback count is in samples (stereo frames) and the codec
- * doesn't stop at zero: it raises the IRQ, reloads and goes on. A tone
- * is one count of all its loops, the 8237 looping the buffer under it,
- * and the IRQ handler clears Playback Enable as it comes, so it stops
- * on the end of the last loop.
- *
- * Source: Yamaha YMF715E (OPL3-SA3) data sheet
- * https://theretroweb.com/chips/6084
+ * WSS codec (AD1848/CS4231 compatible), 16-bit stereo on the OPL3-SAx
+ * (found by SAX.C, usually 530h) and Crystal CS4236/CS4237B (CRYSTAL.C,
+ * on BLASTER I and D). Index at base+4, data at base+5.
+ * The count is in stereo frames and the codec doesn't stop at zero: one
+ * count for all loops, the 8237 loops the buffer, the IRQ handler
+ * clears Playback Enable so it stops at the end of the last loop.
+ * Yamaha YMF715E (OPL3-SA3) data sheet https://theretroweb.com/chips/6084
  */
 
 #include <stdio.h>
@@ -49,10 +34,10 @@
 #define WSS_COUNT_HI    0x0E
 #define WSS_COUNT_LO    0x0F
 
-/* 16-bit signed little endian (01), stereo, divider 5 on the 16.9344 MHz clock: 44100 Hz */
+/* 16-bit signed, stereo, 44100 Hz */
 #define WSS_FMT_S16ST   0x5B
-/* Single DMA channel, no autocalibration: it takes long enough to make the next frame late.
- * The codec was calibrated at power up */
+/* Single DMA, no autocalibration, it makes the next frame late. It was
+ * calibrated at power up */
 #define WSS_IFACE_SDC   0x04
 #define WSS_PEN         0x01
 #define WSS_IEN         0x02
@@ -95,7 +80,7 @@ uint8_t wss_in(uint8_t reg) {
     return (uint8_t)inp(wss_base + WSS_DATA);
 }
 
-/* The index without MCE ends a mode change, the codec busy meanwhile */
+/* Index without MCE ends a mode change */
 int wss_mce_off() {
     wss_wait();
     outp(wss_base + WSS_INDEX, WSS_IFACE);
@@ -132,7 +117,7 @@ void wss_service() {
     }
 }
 
-/* SB IRQ line, in the 16-bit section only the codec plays */
+/* SB IRQ line, only the codec plays in the 16-bit section */
 int wss_shared_isr() {
     if (!wss_ready || wss_irq != sb_irq)
         return 0;
@@ -152,7 +137,7 @@ void wss_unhook() {
 
 #define PROBE_FRAMES    16
 
-/* 64 bytes that don't cross a 64 KB page: one of the two halves */
+/* 64 bytes within a 64 KB page, one of the two halves */
 uint8_t __far wss_probe_area[128];
 
 void __far *wss_probe_buffer() {
@@ -164,14 +149,10 @@ void __far *wss_probe_buffer() {
     return wss_probe_area;
 }
 
-/* The IRQ line the codec raises. Its configuration register leaves the
- * IRQ out on some boards (the OPL3-SA2 reads 03h: DMA 3, no IRQ), so
- * play 16 silent frames with interrupts off and see which request line
- * goes up while the codec holds it, and down once acked. The line is
- * edge triggered: the request stays in the IRR while it is high, masked
- * or not. 
- * Playing through the codec moves the OPL3-SAx out of its SB mode (see
- * SAX.C): a run probes only right before its 16-bit section */
+/* The codec's IRQ line. Some boards leave it out of the config register
+ * (OPL3-SA2 reads 03h), so we play 16 silent frames with interrupts off
+ * and see which request goes up and drops on the ack. Playing moves the
+ * OPL3-SAx out of SB mode, so only right before the 16-bit section */
 uint8_t wss_probe_irq(uint8_t dma) {
     void __far *buffer = wss_probe_buffer();
     uint8_t  pin, iface;
@@ -229,7 +210,7 @@ void wss_print_info() {
     printf(", DMA %u%s\n", wss_dma, env_wss_cfg.mode == WSS_MANUAL ? " (/W)" : "");
 }
 
-/* 16-bit signed stereo at 44100 Hz, DAC at 0 dB, IRQ on. 1 if the format reads back */
+/* 16-bit stereo at 44100 Hz, DAC 0 dB, IRQ on. 1 if it reads back */
 int wss_setup() {
     wss_ready = 0;
     if (!wss_wait())
@@ -259,7 +240,8 @@ int wss_setup() {
     return 1;
 }
 
-/* In the gap before the 16-bit section: the IRQ probed if /W:AUTO didn't find it, its handler in, the codec set up */
+/* In the gap before the 16-bit section: IRQ probed if needed, handler
+ * in, codec set up */
 char *wss_begin() {
     if (!wss_irq) {
         wss_irq = wss_probe_irq(wss_dma);
@@ -283,7 +265,8 @@ char *wss_begin() {
     return NULL;
 }
 
-/* A whole tone: one count of frames * loops (32768 at most), the 8237 looping the buffer. One IRQ, at its end */
+/* A whole tone in one count (32768 at most), the 8237 loops the buffer,
+ * one IRQ at the end */
 unsigned wss_play(void __far *buf, unsigned frames, unsigned loops) {
     uint16_t count = (uint16_t)((uint32_t)frames * loops - 1);
 

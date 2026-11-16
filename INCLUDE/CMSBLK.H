@@ -1,10 +1,8 @@
 #ifndef CMSBLK_H
 #define CMSBLK_H
 
-/* CMS blocks for the sequences, cms_reset() done. A step's frequency is
- * loaded at level 0 ahead of it and started with the level alone, so
- * each block's first step goes in cmsblk_prepare() at the start of the
- * silence before it */
+/* CMS blocks, after cms_reset(). Steps are loaded at level 0 ahead and
+ * started with the level, the first one in cmsblk_prepare() */
 
 typedef enum {
     CMSBLK_NOTES,       /* 96 semitones from A0, chips left and right */
@@ -39,7 +37,7 @@ void cmsblk_steps(cmsblk_kind_t kind, unsigned steps, unsigned frames);
 /* Held, then down a level per frame */
 void cmsblk_chord(unsigned frames);
 
-/* The filler for the blocks this card can't play: A4 at a low level */
+/* Filler for blocks the card can't play: A4 low */
 void cmsblk_filler_on();
 void cmsblk_filler_off();
 

@@ -6,25 +6,13 @@
 #include "host.h"
 
 /*
- * CMS / Game Blaster blocks
- *
- * Every write follows vsync_wait() right away, as in the FM blocks.
- * Stereo blocks play the first chip on the left and the second on the
- * right, so the two chips are compared against each other too.
- *
- * The SAA1099 takes a new frequency or octave at the end of the current
- * period, up to 36 ms at octave 0. So each step is loaded at level 0
- * during the silence before it, and notes start and stop with the level
- * alone, at once. Its output swings between 0 and the level: every
- * start and stop is also a DC step, the card's coupling turns it into
- * a slow thump. The silences are padded so it settles first.
- *
- * The generators run on their own once loaded, so a level write alone
- * starts the note at whatever point of its period it happens to be,
- * different in every run. Each step restarts both chips' generators
- * first, so it starts in the same phase on every run and recordings
- * can be compared in phase too.
- *
+ * CMS / Game Blaster blocks. Stereo blocks play the first chip left and
+ * the second right.
+ * The SAA1099 takes a new frequency at the end of the current period, up
+ * to 36 ms at octave 0, so each step is loaded at level 0 in the silence
+ * before and started with the level alone. Every start is also a DC
+ * step, the silences are padded so the thump settles. Each step restarts
+ * the generators so it starts in the same phase every run.
  * Frequency: 7159090 / 512 * 2^octave / (511 - freq)
  */
 
@@ -34,8 +22,7 @@
 #define REF_OCT         7
 #define REF_FREQ        213
 
-/* Watermark, as the FM ones: 1000.99 / 2001.98 Hz, under Windows
- * 1501.49 / 2499.68 Hz */
+/* Watermark, as FM: 1000.99 / 2001.98 Hz, Windows 1501.49 / 2499.68 Hz */
 #define WM_OK_OCT       5
 #define WM_OK_FREQ      64
 #define WM_BAD_OCT      6
@@ -172,9 +159,8 @@ void cmsblk_sep_on(void *context, int step) {
     cms_level(LEFT_VOICE, cmsblk_sep_left[step], cmsblk_sep_right[step]);
 }
 
-/* ---- Noise on voice 2 of each chip: the three fixed rates, then
- * clocked by voice 1 (silent) at four octaves of A. Random: compared by
- * averaged 1/3 octave bands ('b' in the profile) ---- */
+/* ---- Noise on voice 2: the three fixed rates, then clocked by voice 1
+ * at four octaves of A. Compared in 1/3 octave bands ('b') ---- */
 
 uint8_t cmsblk_noise_octave[4] = { 2, 4, 6, 7 };
 
@@ -198,10 +184,8 @@ void cmsblk_noise_on(void *context, int step) {
     cms_level(RIGHT_VOICE + 1, 0, MAX_LEVEL);
 }
 
-/* ---- Envelopes: generator 0 shapes voice 3, clocked by voice 2
- * (silent) at 55 Hz. Shapes 1-7: full, decay, repeated decay, triangle,
- * repeated triangle, attack, repeated attack. Writing the shape
- * restarts it ---- */
+/* ---- Envelopes: generator 0 on voice 3, clocked by voice 2 at 55 Hz,
+ * shapes 1-7 ---- */
 
 #define ENV_CLK_OCT     1           /* A1, 55 Hz */
 
@@ -224,9 +208,8 @@ void cmsblk_env_on(void *context, int step) {
     cms_level(RIGHT_VOICE + 2, 0, MAX_LEVEL);
 }
 
-/* ---- Stack: A4 on 1 to 6 voices of each chip, restarted together
- * with the step so the squares add in phase. Linear summing adds 20log(n): +6.0, +9.5,
- * +12.0, +14.0, +15.6 dB. Less shows compression or clipping ---- */
+/* ---- Stack: A4 on 1 to 6 voices, in phase. Linear adds +6.0, +9.5,
+ * +12.0, +14.0, +15.6 dB, less is compression or clipping ---- */
 
 void cmsblk_stack_prep(void *context, int step) {
     int v;
@@ -251,8 +234,7 @@ void cmsblk_stack_on(void *context, int step) {
     }
 }
 
-/* ---- Chord: all six voices of each chip, C major over three octaves,
- * the sum ---- */
+/* ---- Chord: all six voices, C major over three octaves ---- */
 
 uint8_t cmsblk_chord_oct[6]  = { 2, 2, 2, 3, 3, 4 };
 uint8_t cmsblk_chord_freq[6] = { 83, 172, 226, 83, 172, 83 };
@@ -279,7 +261,7 @@ void cmsblk_chord_level(uint8_t level) {
     }
 }
 
-/* Down a level per frame instead of the big step of all twelve at once */
+/* Down a level per frame, not all twelve at once */
 void cmsblk_chord(unsigned frames) {
     int level;
 

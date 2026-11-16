@@ -7,8 +7,7 @@
 #include <i86.h>
 #include "pcmdrv.h"
 
-/* 8237 page registers (address bits 16-23), in this odd order since
- * the original PC */
+/* Page registers (address bits 16-23), odd order since the PC */
 uint8_t dma_page_port[4] = { 0x87, 0x83, 0x81, 0x82 };
 
 /* Second 8237, channels 5-7, in the odd order of the first */
@@ -19,11 +18,8 @@ uint32_t dma_phys_of(void __far *ptr) {
     return ((uint32_t)FP_SEG(ptr) << 4) + FP_OFF(ptr);
 }
 
-/* Channels 0-3. Masked while programming so it can't start halfway.
- * The flip-flop picks which byte of a 16-bit register the next write
- * goes to.
- * Cleared, low byte first.
- * The count register takes length - 1, it transfers until it counts past 0 */
+/* Channels 0-3. Masked while programming, flip-flop cleared, low byte
+ * first. The count register takes length - 1 */
 void dma_program(uint8_t channel, void __far *buf, uint16_t len, uint8_t mode) {
     uint32_t phys        = dma_phys_of(buf);
     uint16_t page_offset = (uint16_t)(phys & 0xFFFF);

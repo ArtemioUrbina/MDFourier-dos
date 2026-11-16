@@ -1,6 +1,4 @@
-/*
- * Creative ADPCM through the Sound Blaster DSP, for PCM.C
- */
+/* Creative ADPCM through the SB DSP, for PCM.C */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,51 +13,37 @@
 #include "dsp.h"
 #include "pit.h"
 
-/* ======================================================================
- * ADPCM
- *
- * Creative's 4, 2.6 and 2-bit ADPCM: the DSP decodes each code into an
- * 8-bit sample, adding a step to the previous sample and adapting the
- * step size from the code. Single-cycle, every transfer starts with a
- * reference byte (the first sample) and the smallest step size. As in
- * Creative's programming guide, every DSP from 1.xx to 4.xx takes the
- * commands, many clones don't: pcm_adpcm_probe() tries one first.
- *
- * Each tone is encoded against the decoder itself: for every sample we
- * pick the code whose decoded result lands closest to the sine, so the
- * encoder follows what the card will play. The decoder tables are the
- * ones DOSBox-X uses for the Sound Blaster, from real hardware.
- *
- * One rate for all three, 10000 Hz (TC 156): in range for 4-bit (12 kHz),
- * 2.6-bit (13 kHz) and 2-bit (11 kHz) on DSP 1.xx/2.xx. Measured: the
- * SB 2.0 plays it at 10001 Hz, the SB16 at 9958 Hz, unlike 8-bit PCM at
- * the same card's time constant 211. The clock tone measures it.
- * ====================================================================== */
+/*
+ * Creative's 4, 2.6 and 2-bit ADPCM, the DSP decodes each code into an
+ * 8-bit sample. Every Creative DSP takes it, many clones don't,
+ * pcm_adpcm_probe() tries first. We encode against the decoder itself,
+ * picking the code that lands closest to the sine. Decoder tables from
+ * DOSBox-X, from real hardware.
+ * One rate for all, 10000 Hz (TC 156). Measured: SB 2.0 10001 Hz, SB16
+ * 9958 Hz, the clock tone shows it.
+ */
 
 #define ADPCM_TC        156
 #define ADPCM_RATE      (1000000.0 / 100.0)
 
-/* Sweep from 50 Hz to 4 kHz, below the 5 kHz Nyquist. Level at rate
- * / 10, 1000 Hz, the same 10 samples every period */
+/* Sweep 50 Hz to 4 kHz, under Nyquist. Level at rate / 10, 1000 Hz */
 #define ADPCM_SWEEP_LOW     50.0
 #define ADPCM_SWEEP_HIGH    4000.0
 #define ADPCM_LEVEL_FREQ    (ADPCM_RATE / 10.0)
 
-/* Single-cycle with a reference byte: the transfer's first byte is the
- * first sample, the step size starts at its smallest */
+/* With a reference byte, the step size starts at its smallest */
 #define DSP_ADPCM4_REF  0x75
 #define DSP_ADPCM3_REF  0x77
 #define DSP_ADPCM2_REF  0x17
 
-/* Step added for each code, rows of codes for each step size. The first
- * half of a row adds, the second subtracts */
+/* Step per code, a row per step size. First half adds, second subtracts */
 int8_t pcm_adpcm4_delta[64] = {
     0,  1,  2,  3,  4,  5,  6,  7,  0,  -1,  -2,  -3,  -4,  -5,  -6,  -7,
     1,  3,  5,  7,  9, 11, 13, 15, -1,  -3,  -5,  -7,  -9, -11, -13, -15,
     2,  6, 10, 14, 18, 22, 26, 30, -2,  -6, -10, -14, -18, -22, -26, -30,
     4, 12, 20, 28, 36, 44, 52, 60, -4, -12, -20, -28, -36, -44, -52, -60
 };
-/* Moves to the next row (larger steps) or back, by a row's size */
+/* Next row or back */
 int8_t pcm_adpcm4_adjust[64] = {
       0, 0, 0, 0, 0, 16, 16, 16,   0, 0, 0, 0, 0, 16, 16, 16,
     -16, 0, 0, 0, 0, 16, 16, 16, -16, 0, 0, 0, 0, 16, 16, 16,
@@ -108,11 +92,8 @@ pcm_adpcm_format_t pcm_adpcm_formats[3] = {
     { pcm_adpcm2_delta, pcm_adpcm2_adjust,  4, 6, 4, DSP_ADPCM2_REF, 9 }      /* PCM_ADPCM2 */
 };
 
-/* For each row and each distance to the target, 0-255, the step in
- * the row's first half that lands closest: one lookup per sample
- * instead of trying every code. Rows of the three formats, then the
- * 2.6-bit rows again for its third sample, which can only use the
- * even steps */
+/* Per row and distance to the target, the closest step: one lookup per
+ * sample. 2.6-bit rows twice, its third sample only takes even steps */
 #define ADPCM_PICK_ROWS     (4 + 5 + 6 + 5)
 #define ADPCM_EVEN_ROW      15
 uint8_t pcm_adpcm_pick[ADPCM_PICK_ROWS][256];
@@ -164,10 +145,8 @@ typedef struct {
     int                 row;        /* offset of the step size row */
 } pcm_adpcm_state_t;
 
-/* The code whose decoded sample lands closest to target, the decoder
- * moved past it. The first half of a row moves up, the second down by
- * the same steps. even: the third 2.6-bit sample of a byte has only
- * two bits, its lowest bit is always 0 */
+/* The code that lands closest to target, the decoder moved past it.
+ * even: the third 2.6-bit sample has no lowest bit */
 uint8_t pcm_adpcm_encode(pcm_adpcm_state_t *state, int target, int even) {
     pcm_adpcm_format_t *format = state->format;
     int      distance = target - state->sample;
@@ -189,8 +168,8 @@ uint8_t pcm_adpcm_encode(pcm_adpcm_state_t *state, int target, int even) {
     return best;
 }
 
-/* The tone being encoded, a chunk per frame, like the 8-bit one. A
- * clock uses a table of one period instead of the phase accumulator */
+/* The tone being encoded, a chunk per frame. A clock uses one period's
+ * table instead of the phase */
 struct {
     int                 active;
     unsigned            buf;            /* step buffer, or -1 for the clock */
@@ -202,8 +181,7 @@ struct {
     pcm_adpcm_state_t   state;
 } pcm_adpcm_fill;
 
-/* The clock's period: 8 samples starting at 45 degrees, the last one
- * on 0, as the 8-bit clock */
+/* 8 samples from 45 degrees, the last one on 0, as the 8-bit clock */
 int8_t pcm_adpcm_clock_period[CLK_PERIOD];
 
 int pcm_adpcm_target(unsigned pos) {
@@ -224,7 +202,7 @@ int pcm_adpcm_target(unsigned pos) {
 }
 
 /* Whole bytes: 4-bit high nibble first, 2.6-bit 3 + 3 + 2 bits, 2-bit
- * from the top two bits down */
+ * from the top */
 void pcm_adpcm_fill_samples(unsigned max_samples) {
     pcm_adpcm_state_t *state = &pcm_adpcm_fill.state;
     uint8_t  per_byte;
@@ -260,8 +238,8 @@ void pcm_adpcm_fill_samples(unsigned max_samples) {
         pcm_adpcm_fill.active = 0;
 }
 
-/* Starts encoding samples into dest, from a reference of 128. Returns
- * the transfer's length in bytes, the reference byte included */
+/* Starts encoding into dest from 128, returns the length with the
+ * reference byte */
 uint16_t pcm_adpcm_build(pcm_adpcm_t format, uint8_t __far *dest, unsigned long samples) {
     pcm_adpcm_format_t *fmt = &pcm_adpcm_formats[format];
 
@@ -279,11 +257,9 @@ uint16_t pcm_adpcm_build(pcm_adpcm_t format, uint8_t __far *dest, unsigned long 
 }
 
 /* ---- Probe ----
- * The 4-bit command with a length whose two bytes, 0x60, are no
- * command on any DSP we know of: a DSP that doesn't take ADPCM reads
- * them as unknown commands and ignores them. One that does starts
- * asking for bytes, which the DMA count shows. The transfer is longer
- * than the buffer, so it never ends by itself: a reset stops it */
+ * 4-bit command with length 6060h, no command on any DSP we know: one
+ * without ADPCM ignores it, one with it asks for bytes, the DMA count
+ * shows it. Longer than the buffer, a reset stops it */
 #define ADPCM_PROBE_BYTES   64
 #define ADPCM_PROBE_LENGTH  0x6061      /* sent as 0x60, 0x60 */
 #define ADPCM_PROBE_WAIT    PIT_US_TO_CLK(30000UL)
@@ -297,7 +273,7 @@ int pcm_adpcm_probe() {
     if (!pcm_ready)
         return 0;
 
-    /* Reference at the midpoint, then codes 0: no change, silent */
+    /* Midpoint reference, codes 0: silent */
     pcm_step_buf[0][0] = 128;
     for (pos = 1; pos < ADPCM_PROBE_BYTES; pos++)
         pcm_step_buf[0][pos] = 0;
@@ -321,8 +297,7 @@ int pcm_adpcm_probe() {
 
 /* ---- Clock: 4-bit at rate / 8 ---- */
 
-/* At the start of the silence before it. Built into the 8-bit clock's
- * buffer, done with by then */
+/* At the start of the silence, into the 8-bit clock's buffer */
 void pcm_adpcm_clock_build(unsigned frames) {
     unsigned long samples;
     unsigned pos;
@@ -402,8 +377,7 @@ void pcm_adpcm_step_fill(pcm_adpcm_t format, pcm_steps_t kind, unsigned step, un
     pcm_step_len[buf] = pcm_adpcm_build(format, pcm_step_buf[buf], samples);
 }
 
-/* As pcm_step_start(): the previous step's IRQ counted, this one
- * started as one single-cycle transfer */
+/* As pcm_step_start() */
 void pcm_adpcm_step_start(pcm_adpcm_t format, pcm_steps_t kind, unsigned buf) {
     pcm_count_t *count = &pcm_count_adpcm[kind];
 

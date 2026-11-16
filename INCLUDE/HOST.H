@@ -1,9 +1,8 @@
 #ifndef HOST_H
 #define HOST_H
 
-/* What MDF runs under. In a Windows DOS box (enhanced mode) the VGA,
- * PIT, PIC and DMA are virtualized and the VM can be preempted.
- * The run goes on with looser timing, SB paths only and its own watermark */
+/* What MDF runs under. In a Windows DOS box the hardware is virtualized
+ * and the VM can be preempted: looser timing, SB paths only */
 #define HOST_DOS        0   /* plain DOS, also Win 3.x standard/real mode */
 #define HOST_WINDOWS    1   /* Windows 3.x enhanced mode, 95, 98, ME */
 #define HOST_NT         2   /* NT, 2000, XP: no hardware access */

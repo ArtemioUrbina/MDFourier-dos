@@ -37,15 +37,10 @@ unsigned sax_codec_port;
 int      sax_needs_cfg;
 char     sax_reason[64];
 
-/* AUX2 is the OPL3-SAx FM input.
- * In SB mode the chip sets the FM level from the SB mixer
- * (FM 7 with master 7 is +4.5 dB) and I4/I5 aren't used
- *
- * After playing it stays in WSS mode and FM goes through I4/I5 as they are
- * (06h, +3 dB): measured 1.5 dB lower FM in the runs after a 16-bit one,
- * I4/I5 reading the same.
- * 
- * So whenever the codec is found, I4/I5 at +4.5 dB (SB mode level) and back at exit */
+/* AUX2 is the FM input. In SB mode the chip sets FM from the SB mixer
+ * (+4.5 dB) and ignores I4/I5. After playing it stays in WSS mode and FM
+ * goes through I4/I5 (+3 dB), 1.5 dB lower in the next runs (measured).
+ * So I4/I5 at +4.5 dB whenever the codec is found, back at exit */
 #define AUX2_SB_LEVEL   0x05    /* 1.5 dB steps, 08h = 0 dB: +4.5 dB */
 #define AUX_LEVEL_BITS  0x1F
 
@@ -122,8 +117,7 @@ void sax_ctrl_out(uint8_t reg, uint8_t val) {
     outp(sax_ctrl_port + 1, val);
 }
 
-/* The version bits read only, the master volume read/write.
- * Empty ports read FFh */
+/* Version bits read only, master read/write, empty ports read FFh */
 int sax_ctrl_present(unsigned port) {
     uint8_t misc, again, master, test;
 
@@ -317,7 +311,7 @@ int sax_mixer_report() {
                power, analog_pd);
 
     if (!warn) {
-        printf(" Mixer: %s, OK for capture\n", sax_name());
+        printf(" Mixer: %s %s\n", sax_name(), mixer_ok_text());
         return MIXER_OK;
     }
 
@@ -336,8 +330,8 @@ int sax_find_codec() {
     return 0;
 }
 
-/* DMA from the configuration register, the IRQ from it, or probed when
- * "probe" is set. IRQ 0: left to probe later. */
+/* DMA from the config register, the IRQ too or probed. IRQ 0: probe
+ * later */
 void sax_codec_settings(int *irq, int *dma, int probe) {
     uint8_t config = (uint8_t)inp(sax_codec_port + SAX_CODEC_CONFIG);
 
@@ -354,7 +348,7 @@ void sax_codec_settings(int *irq, int *dma, int probe) {
     }
 }
 
-/* Without /W: what was found and the options, then the run stops */
+/* Without /W: what was found and the options, then stop */
 void sax_print_options(int irq, int dma) {
     char given[24];
 

@@ -1,10 +1,7 @@
 #ifndef PCMINT_H
 #define PCMINT_H
 
-/*
- * What PCM.C, PCMX.C and ADPCM.C share. The sequences use PCM.H, the
- * 16-bit drivers PCMDRV.H
- */
+/* Shared by PCM.C, PCMX.C and ADPCM.C */
 
 #include <stdint.h>
 #include "pcm.h"
@@ -18,73 +15,54 @@
 #define DSP_HS_8BIT     0x91    /* high-speed 8-bit single-cycle, DSP 2.01 and up */
 #define DSP_BLOCK_SIZE  0x48    /* its length, sent before it */
 
-/* Rate = 1000000 / (256 - TC). TC 211 gives 22222.2 Hz, in range for
- * normal mode on every DSP version */
+/* Rate = 1000000 / (256 - TC), 211 is 22222.2 Hz, normal mode on every
+ * DSP */
 #define PCM_TC          211
 #define PCM_RATE        (1000000.0 / 45.0)
 
-/* High-speed mode: TC 233 gives 43478.3 Hz, over the ~23 kHz of normal
- * mode. The rate games used for 44 kHz mono on the SB 2.0 and SB Pro.
- * While a high-speed transfer plays the DSP takes no commands; a
- * single-cycle one goes back to normal mode when it ends. Every DSP
- * from 2.01 takes the same commands, the SB16 included, so all cards
- * play it the same way. The SB Pro output filter (mixer 0x0E) is on,
- * as MIXER.C sets it for all the 8-bit mono tones: its power-on state,
- * the one most games played through */
+/* High-speed: 233 is 43478.3 Hz, what games used for 44 kHz mono on
+ * SB 2.0 and Pro. The DSP takes no commands while it plays, every DSP
+ * from 2.01 the same commands. SB Pro filter on, as for all 8-bit mono */
 #define PCM_HS_TC       233
 #define PCM_HS_RATE     (1000000.0 / 23.0)
 #define HS_SWEEP_HIGH   20000.0
 
-/* Tones fill this share of their block. The rest is silence, so a
- * tone is over before the next one starts even on the slowest card
- * measured, which plays 2.2% long. The silence is also a decay. */
+/* Share of the block a tone fills, the rest silence: the slowest card
+ * measured plays 2.2% long */
 #define FILL_PCT        85
 
-/* Clock tone: rate / 8 (2777.8 Hz), below any card's output filter.
- * Its frequency measures the card's crystal: MDFourier reads it and
- * names the card family from it. Each 8-sample period ends on 0x80,
- * so the DAC rests at the midpoint whenever it stops (no click).
- * The block needs ~18000 samples, the buffer holds CLK_MAX.
- * DMA loops it in auto-init while the DSP plays one
- * single-cycle transfer of ~CLK_PCT of the block.  */
+/* Clock tone, rate / 8 (2777.8 Hz), below any output filter. MDFourier
+ * reads the card's crystal from it. Each period ends on 80h so the DAC
+ * rests at the midpoint. DMA loops it, the DSP plays one transfer */
 #define CLK_PERIOD      8
 #define CLK_MAX         5600
 #define CLK_PCT         95
 
-/* Step tones. Level at rate / 22 so every period is the same 22
- * samples, no table jitter from one period to the next.
- * Single-cycle transfers start and stop at full level.  */
+/* Steps. Level at rate / 22, the same 22 samples every period */
 #define SWEEP_LOW       20.0
 #define SWEEP_HIGH      10000.0
 #define LEVEL_FREQ      (PCM_RATE / 22.0)   /* 1010.1 Hz */
 #define FADE            32                  /* samples, in and out */
 
-/* Sweep and clock 3 dB below full scale, so the first Level step
- * (full scale, 1 kHz) is always the loudest PCM element. MDFourier
- * normalizes to the loudest one, it must not depend on each card's
- * bass or treble response */
+/* Sweep and clock 3 dB down so the first Level step is the loudest PCM
+ * element, MDFourier normalizes to it */
 #define SWEEP_AMP       181                 /* of 256, -3.0 dB */
 #define CLK_AMP         90.0                /* of 127, -3.0 dB */
 #define STEP_MAX        5600                /* 20 frames at 85% */
 
-/* Samples built per frame. A 20-frame step needs 8 frames, a 10-frame
- * one 4: a few ms per frame, even without an FPU */
+/* Samples built per frame, a few ms even without an FPU */
 #define FILL_CHUNK      768
 
-/* ADPCM samples encoded per frame, each one a table lookup and the
- * decoder's step. A 60-frame clock takes 32 frames, a 20-frame step 10 */
+/* ADPCM samples encoded per frame */
 #define ADPCM_CHUNK     256
 
-/* Sine table, 1024 entries, +-127.
- * A power of two, so the top bits of the phase accumulator index it directly */
+/* Sine table, 1024 entries, +-127, indexed by the phase's top bits */
 #define SINE_BITS       10
 #define SINE_SIZE       (1 << SINE_BITS)
 #define AMP_TABLES      (PCM_LEVEL_STEPS + 1)
 #define AMP_SWEEP_TAB   PCM_LEVEL_STEPS
 
-/* Loop buffer, frames: 121 ms at 44.1 kHz, 85% of a 10-frame block, so
- * a Sine step is one loop and a 20-frame Level or Separation step two. At
- * 22.05 kHz the same buffer lasts 243 ms, one loop for a 20-frame step */
+/* Loop buffer: 121 ms at 44.1 kHz, 85% of a 10-frame block */
 #define PCMX_STEP_FRAMES  5355u
 #define PCMX_CLOCK_FRAMES 4096u /* whole rate / 8 periods */
 
@@ -116,13 +94,13 @@ extern int       pcm_dsp_busy;
 extern pcm_count_t pcm_count_adpcm_clock;
 extern pcm_count_t pcm_count_adpcm[2];
 
-/* The clock playing, 8-bit or ADPCM, and the step waiting for its IRQ */
+/* The clock playing and the step waiting for its IRQ */
 extern pcm_count_t *pcm_clock_count;
 extern int       pcm_clock_playing, pcm_clock_pending;
 extern unsigned  pcm_step_irq_base;
 extern int       pcm_step_pending;
 
-/* The 16-bit stereo driver, NULL when 16-bit doesn't play */
+/* NULL when 16-bit doesn't play */
 extern pcm16_driver_t *pcm16;
 
 int  pcm_dsp_play(uint8_t cmd, uint16_t len);

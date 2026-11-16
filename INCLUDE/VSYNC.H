@@ -13,8 +13,7 @@ typedef struct {
     uint32_t      worst_clk;        /* the most a frame was off */
 } vsync_stats_t;
 
-/* Measure the frame period, needed for the interrupt window. 
- * 0 if no VGA retrace or an out of range rate.
+/* Measures the frame period, 0 if no retrace or rate out of range.
  * Needs pit_init() */
 int vsync_calibrate(double *hz);
 
@@ -29,11 +28,8 @@ void vsync_wait();
 void vsync_end(vsync_stats_t *stats);
 unsigned long vsync_first_bad();
 
-/* Under Windows the VM delay a retrace.
- * In tolerant mode:
- * - A frame whose edge already passed counts as played and the next 
- *   waits catches up, so the sequence keeps its place in time.
- * - Bad frames are only counted, we don't stop */
+/* Under Windows the VM delays the retrace. Tolerant mode counts a frame
+ * whose edge passed as played and catches up, bad frames only counted */
 void vsync_set_tolerant(int on);
 void vsync_diagnose();
 

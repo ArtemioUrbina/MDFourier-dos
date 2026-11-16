@@ -3,7 +3,7 @@
 
 #include "pcm.h"
 
-/* 8-bit mono PCM and ADPCM blocks for the sequences. */
+/* 8-bit mono PCM and ADPCM blocks */
 
 void pcmblk_clock(unsigned frames);
 void pcmblk_steps(pcm_steps_t kind, unsigned steps, unsigned frames);

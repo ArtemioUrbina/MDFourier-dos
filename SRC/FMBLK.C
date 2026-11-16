@@ -6,7 +6,7 @@
 #include "sweep.h"
 #include "host.h"
 
-/* The OPL channel the blocks play on, and the next one for the right side on an OPL3 */
+/* OPL channel, the next one is the right side on an OPL3 */
 #define FM_CHANNEL      0
 #define PULSE_COUNT     10
 
