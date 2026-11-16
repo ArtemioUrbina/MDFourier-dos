@@ -3,8 +3,7 @@
 /* Custom timbres from the games' own sysex, as they loaded them into
  * Timbre Memory, on the programs the games called them. A GS synth
  * plays its MT-32 map's preset there, as it would in the game.
- * Synth partials only, no PCM: the Dune ones repeat take to take
- * (measured), Brass17 and Rhodes2 not measured yet.
+ * Synth partials only, no PCM: they repeat take to take (measured).
  * lfo_off: pitch LFO depth to 0 when loaded, SynStrings only repeats
  * that way (measured) */
 
