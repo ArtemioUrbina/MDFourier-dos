@@ -139,11 +139,6 @@ build\mdf.obj: src\mdf.c $(HDRS)
 build\opl.obj: src\opl.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\opl.c
 
-# MKPIF: MDF.PIF for Windows, a program of its own
-mkpif.exe: dirs tools\mkpif.c
-	$(CC) $(CFLAGS) -fo=build\mkpif.obj tools\mkpif.c
-	wlink name mkpif.exe system dos file build\mkpif.obj
-
 clean: .SYMBOLIC
 	@if exist build\*.obj del build\*.obj
 	@if exist build\*.lnk del build\*.lnk
