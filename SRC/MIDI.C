@@ -2,11 +2,8 @@
 #include "midi.h"
 #include "pit.h"
 
-/*
- * MPU-401: the data port at the base, status and command at base + 1.
- * Status bit 6 set: it can't take a byte yet. Bit 7 set: nothing to read.
- * Source: Roland MPU-401 Technical Reference Manual
- */
+/* MPU-401: data at base, status and command at base + 1. Status bit 6:
+ * busy, bit 7: nothing to read */
 #define MIDI_DATA       0
 #define MIDI_STATUS     1
 #define MIDI_DRR        0x40
@@ -22,19 +19,17 @@
 #define MIDI_PROGRAM    0xC0
 #define MIDI_BEND       0xE0
 
-/* A byte takes 320 us on the wire at 31250 baud. We give the MPU-401
- * 10 ms to take one, and 50 ms to answer a command */
+/* A byte is 320 us at 31250 baud */
 #define MIDI_TIMEOUT        PIT_US_TO_CLK(10000UL)
 #define MIDI_ACK_TIMEOUT    PIT_US_TO_CLK(50000UL)
 
 uint16_t midi_port = MIDI_PORT_DEFAULT;
-int      midi_ready;            /* midi_init() succeeded, UART mode */
+int      midi_ready;
 int      midi_uart_unacked;
 unsigned midi_lost_bytes;
 
-/* What comes in on MIDI IN, a module's active sensing or a keyboard,
- * we read and drop: on some interfaces a full input buffer holds the
- * output */
+/* Read and drop MIDI IN, a full input buffer holds the output on some
+ * interfaces */
 void midi_drain() {
     int count = 0;
 
@@ -53,8 +48,7 @@ int midi_wait_ready() {
     return 1;
 }
 
-/* 1 when the MPU-401 answers FEh. Nothing at the port reads FFh: bit 6
- * stays set and we time out */
+/* 1 when it answers FEh */
 int midi_command(uint8_t command) {
     uint32_t start;
 
@@ -76,10 +70,8 @@ int midi_init(uint16_t port) {
     midi_uart_unacked = 0;
     midi_lost_bytes   = 0;
 
-    /* Already in UART mode, the MPU-401 takes the first reset without
-     * answering: the second one answers. Some UART-only interfaces
-     * (DOSBox's mpu401=uart) never answer: one that is there reads its
-     * status with bit 6 clear, an empty port reads FFh */
+    /* In UART mode the first reset isn't answered, the second is. Some
+     * UART only interfaces never answer: an empty port reads FFh */
     if (!midi_command(MIDI_CMD_RESET) && !midi_command(MIDI_CMD_RESET)) {
         if (inp(midi_port + MIDI_STATUS) & MIDI_DRR)
             return 0;
@@ -107,8 +99,7 @@ int midi_send(uint8_t byte) {
     return 1;
 }
 
-/* Every message with its status byte, no running status: each takes
- * the same time on every interface */
+/* Always with the status byte, same timing on every interface */
 void midi_message(uint8_t status, uint8_t data1, uint8_t data2) {
     midi_send(status);
     midi_send(data1);
@@ -159,7 +150,7 @@ void midi_exit() {
         midi_control(channel, MIDI_CC_NOTES_OFF, 0);
         midi_control(channel, MIDI_CC_SOUND_OFF, 0);
     }
-    /* The last bytes leave the MPU-401 before the reset */
+    /* Let the last bytes out */
     pit_delay_us(5000);
     midi_command(MIDI_CMD_RESET);
     midi_ready = 0;

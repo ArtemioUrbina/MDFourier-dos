@@ -29,15 +29,15 @@
 #include "midiset.h"
 #include "profile.h"
 
-/* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
+/* Exit codes for batch files (IF ERRORLEVEL n is n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
 #define EXIT_USAGE      1   /* bad command line */
 #define EXIT_WINDOWS    2   /* running under Windows NT, 2000 or XP */
-#define EXIT_NO_VGA     3   /* no usable vertical retrace */
+#define EXIT_NO_VGA     3   /* no OPL at 388h, or no CMS with /C */
 #define EXIT_NO_FM      4   /* no OPL2/OPL3 at 0x388, CMS sequence: no CMS either */
 #define EXIT_ABORTED    5   /* ESC pressed */
 #define EXIT_BAD_FRAMES 6   /* frame out of tolerance, discard */
-#define EXIT_WSS        7   /* WSS codec found, /W needed */
+#define EXIT_WSS        7   /* DSP on another IRQ than BLASTER I */
 #define EXIT_BAD_IRQ    8   /* the DSP raises another IRQ than BLASTER I */
 #define EXIT_NO_MIDI    9   /* /M: no MPU-401 answered */
 
@@ -56,15 +56,14 @@ int main(int argc, char *argv[]) {
     char          *wss_ignored = NULL;
     int           timing_only = 0;
     int           cms_mode = 0;
-    int           game_blaster;       /* CMS at BLASTER A without a DSP, nor a mixer */
+    int           game_blaster;       /* CMS at BLASTER A, no DSP nor mixer */
     int           midi_mode = 0;
 
     printf("MDFourier DOS 0.96 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
 
-    /* DOS ends a program on Ctrl-C or Ctrl-Break at its next console
-     * call, without the exit handlers: the IRQ vector would stay ours
-     * and the mixer as set for capture. We ignore both, ESC stops MDF */
+    /* Ctrl-C or Ctrl-Break would end us without the exit handlers, IRQ
+     * vector and mixer left ours. Ignored, ESC stops MDF */
     signal(SIGINT, SIG_IGN);
     signal(SIGBREAK, SIG_IGN);
 
@@ -132,7 +131,7 @@ int main(int argc, char *argv[]) {
     if (report_only)
         verbose = 1;
 
-    /* Under Windows the PIT doesn't keep time, we try the CPU time stamp counter */
+    /* Under Windows the PIT doesn't keep time, try the TSC */
     if (host_is_windows()) {
         if (pit_use_tsc())
             printf(" Timing: CPU time stamp counter, %.2f MHz\n",
@@ -150,21 +149,21 @@ int main(int argc, char *argv[]) {
     } else
         pit_init();
 
-    /* /M and /MT need BLASTER only for P, main_midi() says which port */
+    /* /M only needs BLASTER for P */
     if (!env_get_blaster(&cfg)) {
         if (!midi_mode)
             printf(" BLASTER: not set%s\n", report_only ? "" : ", PCM plays fillers");
     } else if (verbose)
         env_print(&cfg);
 
-    /* NT has no hardware access. A Windows 3.x/9x DOS box runs, with
-     * looser timing, SB paths only and the Windows watermark */
+    /* NT has no hardware access. A Windows DOS box runs with looser
+     * timing, SB paths only */
     if (host_detect() == HOST_NT) {
         printf("Running under %s is not supported, it has no access to the\n"
                "hardware. Use DOS, or Windows 9x in MS-DOS mode\n", host_name());
         return EXIT_WINDOWS;
     }
-    /* What the DOS box's PIF should have, in each version's own terms */
+    /* What the PIF should have, in each version's terms */
     if (host_is_windows()) {
         printf(" %s DOS box: recorded with the Windows watermark,\n"
                "   ESS Extended mode and WSS codecs are left to Windows\n", host_name());
@@ -214,8 +213,7 @@ int main(int argc, char *argv[]) {
             uint8_t major = caps.dsp_version.major;
 
             caps.dsp = 1;
-            /* The ESS identify command goes only to a DSP 3.xx, the
-             * version the AudioDrive reports */
+            /* ESS ID only on a DSP 3.xx, as the AudioDrive reports */
             caps.dsp_ess = major == 3 && mixer_is_ess(base);
             printf(" DSP: version %u.%02u%s\n", major, caps.dsp_version.minor,
                    caps.dsp_ess ? ", ESS" : "");
@@ -253,8 +251,7 @@ int main(int argc, char *argv[]) {
         return EXIT_OK;
     }
 
-    /* FM gives the sync, or CMS under /C: without either we stop here,
-     * before the mixer, the timing and the PCM setup */
+    /* FM gives the sync, or CMS with /C. Without either stop here */
     main_probe_fm(&caps);
     if (caps.fm == CAPS_FM_NONE && (!cms_mode || caps.cms == CMS_NONE)) {
         main_nothing_to_play(&caps, &cfg, cms_mode);
@@ -286,9 +283,7 @@ int main(int argc, char *argv[]) {
                 mixer_how = MIXER_HOW_SET;
             else
                 printf(" Mixer: settings not accepted, set your mixer manually\n");
-            /* Exit handlers run last registered first: the Crystal
-             * wavetable port, the WSS and DSP IRQ vectors, SRS, this
-             * mixer, the OPL3-SAx */
+            /* Exit handlers run last registered first */
             atexit(mixer_restore);
         }
 
@@ -306,18 +301,17 @@ int main(int argc, char *argv[]) {
     } else
         caps.mixer = mixer_report(&cfg);
 
-    /* The cards' own mixers, and an effect kept by /K, which alters
-     * what is recorded */
+    /* The cards' own mixers, and an effect kept by /K */
     if (caps.sbpro_compatible) {
         caps.mixer = cards_mixer_report(caps.mixer);
         caps.mixer = cards_effects_check(caps.mixer);
     }
 
-    /* A CS4237B translates the SB levels into its own, we show them */
+    /* A CS4237B maps the SB levels to its own, we show them */
     if (verbose && caps.sbpro_compatible)
         cards_report((uint16_t)cfg.port);
 
-    /* What we do with the SB Pro output filter for the _NF sweeps */
+    /* What we do with the SB Pro filter for the _NF sweeps */
     if (verbose && !cms_mode) {
         if (mixer_sbpro_filter_switched())
             printf(" Mixer: output filter turned off for the _NF sweeps, back on after\n");
@@ -340,7 +334,7 @@ int main(int argc, char *argv[]) {
         return EXIT_NO_VGA;
     }
 
-    /* No BLASTER at all: the PCM sections play fillers, said once above */
+    /* No BLASTER: the PCM sections play fillers */
     if (!game_blaster && cfg.port != -1)
         caps.pcm = pcm_init(&cfg, hz, !cms_mode);
     if (pcm_irq_mismatch())
@@ -399,8 +393,8 @@ void main_probe_fm(caps_t *caps) {
         opl3_set_new_mode(1);
 }
 
-/* Nothing gives the sync: why, and what to check. Nothing answering at
- * all is usually a Plug and Play card not set up yet */
+/* Nothing gives the sync: why and what to check. Usually a PnP card
+ * not set up yet */
 void main_nothing_to_play(caps_t *caps, blaster_cfg_t *cfg, int cms_mode) {
     printf("Nothing to play: no FM%s for the sync", cms_mode ? " or CMS" : "");
     if (cfg->port == -1)
@@ -424,8 +418,8 @@ midi_family_t *main_midi_family;
 int            main_midi_set = -1;
 unsigned       main_midi_port;
 
-/* After /M: "", "T", ":GS", ":GS,MT32", ":MT32,300", "T:300". A name
- * is the family, then the set; a number is the port */
+/* After /M: "", "T", ":GS", ":GS,MT32", ":MT32,300", "T:300". Names are
+ * family then set, a number is the port */
 int main_midi_option(char *arg) {
     char     copy[32], *token;
     int      names = 0;
@@ -463,7 +457,7 @@ int main_midi_option(char *arg) {
     return 1;
 }
 
-/* No Sound Blaster setup: the synth is recorded from its own output */
+/* No SB setup, the synth is recorded from its own output */
 int main_midi(blaster_cfg_t *cfg) {
     midi_family_t *family = main_midi_family;
     int      set = main_midi_set >= 0 ? main_midi_set : family->set;
@@ -510,8 +504,7 @@ int main_midi(blaster_cfg_t *cfg) {
     return EXIT_OK;
 }
 
-/* /T: 30 s of frames, no sound, to see how the timing holds. Under
- * Windows tolerant as the sequence would run */
+/* /T: 30 s of frames, no sound, to check the timing */
 #define TIMING_SECONDS  30
 
 int timing_test(double hz) {
@@ -530,7 +523,7 @@ int timing_test(double hz) {
     }
     vsync_end(&stats);
     vsync_print_stats(&stats, frame);
-    /* The DOS sequence would have stopped at the first one */
+    /* DOS would have stopped at the first one */
     if (stats.bad && !host_is_windows())
         printf("  first bad frame: %lu\n", vsync_first_bad());
     return stats.bad ? EXIT_BAD_FRAMES : EXIT_OK;

@@ -1,8 +1,4 @@
-/*
- * The cards of CARDDRV.H, called in the order of the list: the OPL3-SAx
- * first, then the Crystal, the order MAIN.C called them in before they
- * had a list.
- */
+/* The CARDDRV.H cards, OPL3-SAx then Crystal */
 
 #include <stdio.h>
 #include "carddrv.h"
@@ -64,7 +60,7 @@ void cards_effects_off() {
             cards[i]->effects_off();
 }
 
-/* A card's own mixer report counts when it has one and it isn't OK */
+/* A card's own mixer report counts when it isn't OK */
 int cards_mixer_report(int sb_mixer) {
     int      mixer = sb_mixer;
     unsigned i;
@@ -80,7 +76,7 @@ int cards_mixer_report(int sb_mixer) {
     return mixer;
 }
 
-/* An effect left on by /K makes the mixer not verified */
+/* An effect left on by /K: mixer not verified */
 int cards_effects_check(int mixer) {
     unsigned i;
 

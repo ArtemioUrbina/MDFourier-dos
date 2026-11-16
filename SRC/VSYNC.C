@@ -1,10 +1,4 @@
-/*
- * VGA vertical retrace detection.
- *
- * Port 0x3DA, bit 3 (0x08) of the Input Status Register 1 is set
- * for the duration of the vertical retrace pulse.
- *
- */
+/* VGA vertical retrace, port 3DAh bit 3 */
 
 #include <stdio.h>
 #include <conio.h>
@@ -123,8 +117,7 @@ void vsync_wait() {
     vsync_last_edge = t;
     vsync_stats.frames++;
 
-    /* When in tolerantmode, an edge went by while waiting, at the next one now.
-     * Back to the first, the next waits return at once for the others */
+    /* Tolerant: an edge went by while waiting, catch up */
     if (vsync_tolerant && delta > vsync_period_clk + vsync_period_clk / 2) {
         uint32_t edges = (delta + vsync_period_clk / 2) / vsync_period_clk;
 
@@ -162,8 +155,8 @@ int vsync_wait_edge_timeout(uint32_t timeout) {
     return 1;
 }
 
-/* BIOS tick count, 18.2 Hz from the timer interrupt.
- * When in Windows, a second clock to check the PIT reads and the retrace against */
+/* BIOS ticks, 18.2 Hz. Under Windows a second clock to check the PIT
+ * and the retrace */
 #define BDA_TICKS       (*(volatile uint32_t __far *)MK_FP(0x40, 0x6C))
 #define DIAG_GUARD      20000000UL      /* loop limit if the ticks stop */
 

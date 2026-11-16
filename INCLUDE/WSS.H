@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* Windows Sound System codec (AD1848/CS4231 compatible), as on the OPL3-SAx */
+/* WSS codec (AD1848/CS4231 compatible), as on the OPL3-SAx */
 
 /* Indexed registers */
 #define WSS_AUX2_L      0x04

@@ -1,14 +1,8 @@
 /*
- * What MDF runs under: DOS, a Windows DOS box, or NT
- *
- * INT 2Fh AX=1600h answers the enhanced mode Windows version in AL/AH,
- * 00h or 80h when it isn't running (DOS, Windows 3.x standard or real
- * mode, Windows 9x "MS-DOS mode" we get real hardware access).
- * NT's NTVDM doesn't answer it, its DOS true version (INT 21h AX=3306h) is 5.50
- *
- * A PIF with "Prevent MS-DOS-based programs from detecting Windows"
- * makes 1600h answer 00h, but the DOS box still has windir in its environment,
- * MS-DOS mode and plain DOS don't
+ * DOS, a Windows DOS box, or NT
+ * INT 2Fh AX=1600h gives the enhanced mode Windows version, 00h or 80h
+ * when not running. NTVDM doesn't answer, its true DOS version is 5.50.
+ * A PIF can hide Windows from 1600h, windir is still in the environment
  */
 
 #include <stdio.h>

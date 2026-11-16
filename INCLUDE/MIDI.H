@@ -3,11 +3,7 @@
 
 #include <stdint.h>
 
-/*
- * MPU-401 in UART mode: every byte written to its data port goes out on
- * MIDI OUT as it is. The Roland MPU-401 and the cards' MPU-401 ports
- * all take it, most games used it.
- */
+/* MPU-401 in UART mode */
 
 #define MIDI_PORT_DEFAULT   0x330
 
@@ -26,16 +22,14 @@
 
 extern uint16_t midi_port;
 
-/* Reset, then UART mode. 1 when an MPU-401 is there */
+/* Reset, then UART mode, 1 when there */
 int  midi_init(uint16_t port);
-/* It didn't answer the reset or the UART command, as some UART-only
- * interfaces don't: we send anyway */
+/* Didn't answer, some UART only interfaces don't: we send anyway */
 int  midi_uart_unconfirmed();
-/* Notes and sound off on every channel, and the MPU-401 out of UART
- * mode. For atexit(), it does nothing if midi_init() didn't succeed */
+/* Notes and sound off, UART mode off. For atexit() */
 void midi_exit();
 
-/* 0 when the MPU-401 didn't take the byte in time, it is counted lost */
+/* 0 if it didn't take the byte in time, counted as lost */
 int  midi_send(uint8_t byte);
 void midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
 void midi_note_off(uint8_t channel, uint8_t note);

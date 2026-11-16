@@ -33,8 +33,8 @@
 #define CTRL_SOUND_ON   0x01
 #define CTRL_SYNC       0x02
 
-/* Game Blaster detection latch: written at base+6, read back at base+A.
- * On a Sound Blaster those are the DSP's reset and read ports */
+/* Game Blaster latch: write base+6, read back base+A. On an SB those are
+ * the DSP reset and read ports */
 #define LATCH_WRITE     6
 #define LATCH_READ      0x0A
 
@@ -65,7 +65,7 @@ int cms_detect(uint16_t base) {
 
     cms_base = base;
 
-    /* A DSP here is a Sound Blaster. Only 1.x and 2.0 have the sockets */
+    /* A DSP here is an SB, only 1.x and 2.0 have the sockets */
     if (dsp_reset(base)) {
         if (!dsp_get_version(base, &ver)) {
             cms_detect_reason = "a DSP answers without a version";
@@ -160,7 +160,7 @@ void cms_level(int voice, uint8_t left, uint8_t right) {
     cms_write(voice / 6, (uint8_t)(REG_AMPL + voice % 6), (uint8_t)(((right & 15) << 4) | (left & 15)));
 }
 
-/* Both chip generators restarted together. Same notes in phase */
+/* Both chips' generators restarted together, in phase */
 void cms_sync() {
     int chip;
 

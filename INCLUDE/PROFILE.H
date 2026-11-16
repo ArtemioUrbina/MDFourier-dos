@@ -1,11 +1,8 @@
 #ifndef PROFILE_H
 #define PROFILE_H
 
-/*
- * The MDFourier profile for each sequence: the name MDFourier's
- * profile list shows (the profile's second line) and its file, as in
- * MDFourier's profiles folder. MDF prints both before it plays
- */
+/* MDFourier profile for each sequence, name and file, printed before
+ * it plays */
 
 #define PROFILE_MAIN_NAME   "DOS: Sound Blaster FM and PCM"
 #define PROFILE_MAIN_FILE   "mdfblocks-msdos.mfn"

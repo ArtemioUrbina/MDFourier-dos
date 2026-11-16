@@ -37,9 +37,8 @@
 #define SB16_TREBLE 0x44        /* L, R at +1: bits 7-4, 7 and 8 = 0 dB */
 #define SB16_BASS   0x46
 
-/* ESS ES18xx extended registers (ES1869 data sheet, Tables 18-24).
- * Volumes are L/R nibbles: FM and mic 8 = 0 dB, 15 = +10.5 dB;
- * CD, aux, line, mono in 13 = 0 dB; 0 = mute */
+/* ESS ES18xx extended registers (ES1869 data sheet, Tables 18-24). L/R
+ * nibbles: FM and mic 8 = 0 dB, CD, aux, line, mono in 13 = 0 dB */
 #define ESS_ID      0x40        /* reads 0x18, then 0x69 */
 #define ESS_VOICE   0x14        /* Audio 1 (DSP) play, 14 = 0 dB, 15 = +1.5 dB */
 #define ESS_MIC     0x1A
@@ -92,11 +91,9 @@ mix_std_t mixer_sbpro_std[] = {
     { SBP_MIC,         0x06, 0x00, 0x06 }
 };
 
-/* Output filter on and mono, the power-on state. A DSP reset leaves
- * them as the last program did, and both change the 8-bit mono tones:
- * the filter their high end, the stereo bit sends samples to left and
- * right in turn. Set only where the filter bit holds what is written.
- * The stereo section turns them its way and back, PCM.C */
+/* Filter on and mono, the power-on state. A DSP reset leaves what the
+ * last program set, and both change the 8-bit mono tones. Only where the
+ * filter bit holds. The stereo section changes them and back, PCM.C */
 mix_std_t mixer_sbpro_out_std[] = {
     { SBP_OUT,         0x22, 0x00, 0x22 }
 };
@@ -148,11 +145,9 @@ int mix_present(uint16_t base, uint8_t reg, uint8_t mask) {
     return ((got ^ test) & mask) == 0;
 }
 
-/* ESS identification: DSP command E7h answers 68h, 8xh on the ES688,
- * ES1688, the ES18xx and the Solo-1 in legacy mode. Mixer 0x40 reads
- * 18h only on the ES18x8/9, a Solo-1 reads 19h.
- * Asked at startup with DSP resets around it
- * unknown command on a Creative DSP only times out */
+/* ESS ID: DSP E7h answers 68h, 8xh on ES688, ES1688, ES18xx and Solo-1
+ * legacy. Mixer 40h reads 18h only on ES18x8/9, Solo-1 19h. A Creative
+ * DSP just times out */
 #define DSP_ESS_ID  0xE7
 
 int mixer_ess_found = -1;
@@ -217,8 +212,8 @@ int mixer_report_sb16(uint16_t base) {
     low   = (mstl >> 3) != 31 || (mstr >> 3) != 31 || (fml >> 3) != 31 || (fmr >> 3) != 31 ||
             (vol >> 3) != 31 || (vor >> 3) != 31;
     boost = gl || gr;
-    /* All zero: real SB16 at minimum, or DOSBox, which starts them at
-     * 0 and doesn't emulate tone controls. Can't tell which */
+    /* All zero: a real SB16 at minimum, or DOSBox, which doesn't emulate
+     * tone. Can't tell */
     tone0 = has_tone && !tl && !tr && !bl && !br;
     tone  = has_tone && !tone0 &&
             (tl < 7 || tl > 8 || tr < 7 || tr > 8 || bl < 7 || bl > 8 || br < 7 || br > 8);
@@ -267,10 +262,9 @@ int mixer_sbpro_has_out(uint16_t base) {
     return mix_present(base, SBP_OUT, SBP_OUT_FILTER_OFF);
 }
 
-/* A card that keeps the filter bit without a filter behind it: still
- * set, shown, not a warning. Only the CS4237B: the Orpheus II plays the
- * 8-bit tones the same with it on or off, measured. Other Crystal chips
- * warn as any SB Pro until one is measured */
+/* Filter bit kept but no filter: set, shown, no warning. Only the
+ * CS4237B, the Orpheus II played the 8-bit tones the same either way
+ * (measured) */
 int mixer_filter_unused;
 
 void mixer_sbpro_filter_unused() {
@@ -284,13 +278,12 @@ int mixer_sbpro_out_bad(int out) {
     return out & (mixer_filter_unused ? SBP_OUT_STEREO : SBP_OUT_FILTER_OFF | SBP_OUT_STEREO);
 }
 
-/* MDF set 0Eh for capture: the unfiltered sweeps may switch the filter */
+/* MDF set 0Eh, the unfiltered sweeps may switch the filter */
 uint16_t mixer_out_base;
 int      mixer_out_set;
 
-/* The unfiltered sweeps: filter off before them, back on after. Only
- * where MDF set the mixer and the card holds the bit. Elsewhere they
- * play as the other tones, the same filter state */
+/* Filter off for the unfiltered sweeps, back on after. Only where MDF
+ * set the mixer and the bit holds */
 void mixer_sbpro_filter(int on) {
     uint8_t out;
 
@@ -304,9 +297,8 @@ int mixer_sbpro_filter_switched() {
     return mixer_out_set;
 }
 
-/* SB Pro stereo, DSP 3.xx: stereo on and the filter off, as Creative's
- * guide plays it, on any card and with /K too. 0Eh goes back to what
- * it was before the stereo section */
+/* SB Pro stereo, DSP 3.xx: stereo on and filter off as Creative's guide
+ * plays it, also with /K. 0Eh goes back after */
 uint16_t mixer_stereo_base;
 int      mixer_stereo_saved = -1;
 

@@ -3,12 +3,7 @@
 
 #include "dsp.h"
 
-/*
- * What this machine has to play the sequence with. MAIN.C fills it in
- * once, before the sequence starts, and hands it to the sequence, so
- * each one picks its sources from a single place instead of a set of
- * separate flags.
- */
+/* What this machine can play, filled in once by MAIN.C */
 
 /* FM chip at 0x388 */
 #define CAPS_FM_NONE    0

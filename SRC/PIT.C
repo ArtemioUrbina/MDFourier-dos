@@ -25,7 +25,7 @@ uint16_t pit_tb_last;
 uint16_t pit_tb_rem;
 uint32_t pit_tb_clocks;
 
-/* Windows' PIT: counting by one instead of two, or scaled to the BIOS ticks when neither fits */
+/* Windows' PIT counts by one, or gets scaled to the BIOS ticks */
 int      pit_tb_by_one;
 double   pit_tb_scale = 1.0;
 double   pit_tb_sfrac;
@@ -54,9 +54,8 @@ void pit_delay_us(uint32_t us) {
         ;
 }
 
-/* For 386 and up only. We use this under Windows.
- * Raw bytes since the compiler targets the 8086.
- * CPUID 1, EDX bit 4: RDTSC */
+/* 386 and up, used under Windows. Raw bytes, the compiler targets the
+ * 8086. CPUID 1, EDX bit 4: RDTSC */
 int cpu_has_tsc();
 #pragma aux cpu_has_tsc = \
     0x66 0x53                       /* push ebx */          \
@@ -76,8 +75,8 @@ uint32_t tsc_read();
     0x66 0xC1 0xEA 0x10             /* shr edx, 16 */       \
     value [dx ax] modify exact [ax dx];
 
-/* CPUID is tried directly: the EFLAGS ID test can't be trusted in a Windows DOS box, its POPF is emulated.
- * Without CPUID (a 486) the invalid opcode comes back as INT 6 and the handler steps over it */
+/* We try CPUID directly, the EFLAGS ID test isn't reliable in a Windows
+ * DOS box. On a 486 it comes back as INT 6 and the handler skips it */
 volatile int pit_ud_hit;
 
 void __interrupt __far pit_ud_handler(union INTPACK r) {
@@ -85,8 +84,8 @@ void __interrupt __far pit_ud_handler(union INTPACK r) {
     r.w.ip += 2;                    /* the 2-byte CPUID */
 }
 
-/* BIOS ticks are 18.2 Hz, the reference the counter is measured against.
- * Under Windows they come in bursts at times, over ~2 s that is within ~0.5% */
+/* BIOS ticks, 18.2 Hz, the reference. Under Windows they come in
+ * bursts, within ~0.5% over ~2 s */
 #define BDA_TICKS       (*(volatile uint32_t __far *)MK_FP(0x40, 0x6C))
 #define TICKS_PER_SEC   (1193181.67 / 65536.0)
 #define CAL_TICKS       36
@@ -208,7 +207,6 @@ uint32_t pit_now() {
     return pit_tb_clocks;
 }
 
-
 /* Set channel 0 to mode 3, reload 65536 (BIOS default) */
 void pit_init() {
     unsigned flags;
@@ -223,10 +221,9 @@ void pit_init() {
     irq_restore(flags);
 }
 
-/* Windows 3.x's virtual PIT counts by one, not by two as mode 3 does:
- * half the clocks per BIOS tick.
- * Its count is right, the ticks are the ones that lose time there, ~1.7%.
- * Only when the count is something else, it's scaled to the ticks. */
+/* Windows 3.x's virtual PIT counts by one, not two as mode 3 does. Its
+ * count is right, the ticks lose ~1.7% there. Anything else gets scaled
+ * to the ticks */
 int pit_check_rate() {
     uint32_t start, end;
     int      ticks;

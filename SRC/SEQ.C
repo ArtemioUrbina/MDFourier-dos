@@ -24,7 +24,7 @@ void seq_begin(void (*frame_hook)()) {
     vsync_begin();
 }
 
-/* A late frame stops the run, under Windows we only count it */
+/* A late frame stops the run, under Windows only counted */
 int seq_check() {
     if (!seq_aborted && !host_is_windows() && vsync_first_bad()) {
         seq_aborted   = 1;

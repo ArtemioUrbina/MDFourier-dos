@@ -8,18 +8,11 @@
 #include "cms.h"
 
 /*
- * CMS sequence (/C), its own profile: DOS: Sound Blaster 2.0 and CMS
- *
- * FM, CMS, 8-bit mono PCM and ADPCM, for the Sound Blaster 2.0 and
- * earlier cards, the Game Blaster, and the ADPCM of the later ones. It plays the same timeline on every
- * card: each source starts with its clock block, and a source the card
- * doesn't have leaves its clock block silent and plays a filler in its
- * other blocks, so the recording doesn't go quiet and look finished.
- * MDFourier skips the types of an optional clock whose tone is missing.
- *
- * Sync and watermark come from FM when there is one, from CMS on a Game
- * Blaster. The CMS blocks load each step ahead of it at level 0, so
- * their first step goes in at the start of the silence before them.
+ * CMS sequence (/C), profile DOS: Sound Blaster 2.0 and CMS
+ * FM, CMS, 8-bit mono PCM and ADPCM, for the SB 2.0 and earlier, the Game
+ * Blaster, and the ADPCM of later cards. Same timeline on every card: a
+ * missing source leaves its clock block silent and plays a filler in the
+ * rest, MDFourier skips it. Sync from FM, or CMS on a Game Blaster.
  */
 
 #define SILENCE_FRAMES  20
@@ -48,9 +41,8 @@ int sb2seq_pcm;         /* 8-bit PCM plays its blocks */
 int sb2seq_adpcm;       /* ADPCM plays its blocks */
 int sb2seq_mixer_ok;
 
-/* What a silence loads in its last frame, so the next block's first
- * start lands right on a frame edge. The CMS blocks are loaded at the
- * start of the silence instead, by sb2seq_cms_gap() */
+/* What a silence loads in its last frame. CMS blocks load at the start
+ * of the silence instead, sb2seq_cms_gap() */
 typedef enum {
     PREP_NONE,
     PREP_FM_REF,        /* FM SINE, reference note, centered */
@@ -149,7 +141,7 @@ void sb2seq_filler(unsigned steps, unsigned frames) {
     seq_silence(FILLER_DECAY);
 }
 
-/* Clock blocks of a missing source stay silent, MDFourier skips its types */
+/* Clock blocks of a missing source stay silent */
 
 void sb2seq_fm_steps(fmblk_steps_t kind, unsigned steps, unsigned frames) {
     if (sb2seq_fm)
@@ -172,8 +164,7 @@ void sb2seq_pcm_steps(pcm_steps_t kind, unsigned steps, unsigned frames) {
         sb2seq_filler(steps, frames);
 }
 
-/* A format's sweep and levels, each first step built during the
- * silence before it */
+/* A format's sweep and levels */
 void sb2seq_adpcm_format(pcm_adpcm_t format) {
     pcm_adpcm_step_fill(format, PCM_SWEEP, 0, 0, ADPCMSINE_FRAMES);
     sb2seq_gap(PAD_FRAMES, PREP_NONE);
@@ -207,7 +198,7 @@ int sb2seq_run(caps_t *caps) {
     /* Next PCM step, a chunk per frame */
     seq_begin(sb2seq_pcm ? pcm_fill_more : NULL);
 
-    /* The sync tone loaded before the first pulse, a CMS one running at level 0 */
+    /* Sync tone loaded before the first pulse, CMS at level 0 */
     sb2seq_ref_prepare();
     seq_add_frames(LEAD_FRAMES);
     for (i = 0; i < LEAD_FRAMES; i++)
@@ -270,8 +261,8 @@ int sb2seq_run(caps_t *caps) {
     else
         sb2seq_filler(1, CHORD_FRAMES);
 
-    /* ADPCMCLK: 4-bit at rate / 8, encoded during the silence. The
-     * speaker goes on at its start, the SB 1.x/2.0 takes up to ~112 ms */
+    /* ADPCMCLK: 4-bit at rate / 8. Speaker on at its start, the SB
+     * 1.x/2.0 takes up to ~112 ms */
     if (!seq_stopped()) {
         pcm_prepare();
         pcm_adpcm_clock_build(CLK_FRAMES);
@@ -282,9 +273,8 @@ int sb2seq_run(caps_t *caps) {
     else
         seq_silence(CLK_FRAMES);
 
-    /* ADPCM4, ADPCM3 (2.6-bit), ADPCM2: sweep and levels each. Before
-     * the 8-bit PCM: their distortion reaches the sync tone's frequency,
-     * so the last block before the closing pulses stays a clean one */
+    /* ADPCM4, ADPCM3 (2.6-bit), ADPCM2. Before the 8-bit PCM: their
+     * distortion reaches the sync frequency, the last block stays clean */
     sb2seq_adpcm_format(PCM_ADPCM4);
     sb2seq_adpcm_format(PCM_ADPCM3);
     sb2seq_adpcm_format(PCM_ADPCM2);

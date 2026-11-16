@@ -10,16 +10,14 @@
 
 void pit_init(); 
 
-/* Under Windows the PIT reads are virtualized and don't keep time.
- * Instead of pit_init() we use the CPU time stamp counter calibrated to the
- * BIOS ticks in PIT clocks. If the ticks don't move, the PIT stays */
+/* Under Windows the PIT doesn't keep time, we use the TSC calibrated to
+ * the BIOS ticks. If the ticks don't move the PIT stays */
 int  pit_use_tsc();
 /* CPU clock measured by pit_use_tsc() */
 double pit_tsc_hz();
 char  *pit_tsc_failure();
 
-/* Without a TSC (a 486) the PIT's rate checked against the BIOS ticks.
- * Read by one when it counts by one (Windows 3.x), scaled to the ticks if not near either  */
+/* No TSC (486): PIT rate checked against the BIOS ticks */
 int    pit_check_rate();
 /* PIT clocks per BIOS tick it measured, 65536 when real */
 double pit_ticks_measured();

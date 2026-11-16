@@ -3,10 +3,9 @@
 
 #include "midifam.h"
 
-/* MIDI sequence (/M). Needs midi_init() */
+/* MIDI sequence (/M), needs midi_init() */
 
-/* Resets the synth the family's way and sets its channel up, before
- * the timing starts. set: MIDISET_GM or MIDISET_MT32 */
+/* Resets the synth and sets the channel up, before the timing */
 void midiseq_setup(midi_family_t *family, int set);
 
 /* SEQ_OK, SEQ_ABORTED or SEQ_BAD_FRAMES */

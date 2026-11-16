@@ -7,49 +7,28 @@
 #include "pit.h"
 
 /*
- * MIDI sequence (/M): the timeline. How each synth is talked to is its
- * family's (MIDIFAM.C), what the typical blocks play is the content
- * set's (MIDISET.C). Melodic notes on MIDI channel 2, drums on 10.
+ * MIDI sequence (/M). How we talk to a synth is in MIDIFAM.C, what the
+ * instrument blocks play in MIDISET.C. Notes on channel 2, drums on 10.
  *
- *   Sync        10 pulses of the tone at C8 (4186 Hz), one frame on, one off
- *   Padding     the pulses' release, out of the silence
- *   Silence
- *   MIDICLK     the tone at A5 (880 Hz), the tuning: MDFourier reads A4
- *
- *   Clean, the family's tone, the synth's own engine:
- *   ToneSweep   30 notes, A0 to C8 in minor thirds
+ *   Sync        10 pulses of the tone at C8, one frame on, one off
+ *   Padding, Silence
+ *   MIDICLK     the tone at A5, the tuning
+ *   ToneSweep   30 notes, A0 to C8
  *   ToneLevel   A4, velocity 127 down to 71
  *   TonePan     A4 left, right, center
- *
- *   Typical, the set's instruments, what games played:
- *   8 instruments, 8 notes each across their range
+ *   8 instruments, 8 notes each
+ *   5 games' custom timbres, MT-32 set
  *   Drums       8 hits
+ *   Padding, Silence, Sync
  *
- *   Padding     the last release, out of the silence
- *   Silence
- *   Sync
- *
- * MDFourier finds the pulses in windows of a fraction of a millisecond,
- * where a tone near 6 kHz stands out best. C8 is the highest note every
- * synth plays (FluidSynth plays nothing above it with the soundfonts we
- * tried, the MT-32 plays 12 to 108); the profile asks for 6000 Hz, which
- * in those windows finds C8 too.
- *
- * Each family ends a pulse sharply: on an MT-32 and an SC-55 pulses of
- * two frames measured 27.7 to 28.5 ms for 28.5, starting on time to
- * 0.3 ms. So pulses are one frame, as MDFourier's other profiles: its
- * start search placed a two-frame train one pulse late on an MT-32
- * capture and corrected it by one frame, reading the rate 600 ppm off.
- * FluidSynth blurred one-frame pulses before each family had its cut.
- *
- * The clean blocks compare a synth with others of its family, real or
- * emulated. The typical blocks compare any two synths that played the
- * same set.
+ * C8 is the highest note every synth plays, the profile's 6000 Hz finds
+ * it. Pulses are one frame: with two, MDFourier placed an MT-32 train
+ * one pulse late.
  */
 
 #define MIDISEQ_CHANNEL 1           /* MIDI channel 2 */
 #define MIDI_CC_BANK    0
-#define TONE            -1          /* midiseq_instrument(): the family's tone */
+#define TONE            -1
 
 #define PULSE_COUNT     10
 #define PULSE_FRAMES    1           /* on, then as many off */
@@ -62,25 +41,19 @@
 #define SWEEP_STRIDE    3
 #define SWEEP_STEPS     30          /* to C8, 108 */
 #define LEVEL_STEPS     8
-/* Velocity 127, 119 ... 71. Steps of 16 went down 26 dB on an MT-32,
- * the last two under its noise */
+/* Velocity 127, 119 ... 71, steps of 16 ended under the MT-32's noise */
 #define LEVEL_STRIDE    8
 #define PAN_STEPS       3
 
 #define SILENCE_FRAMES  20
-/* After the last note, before the Silence: measured on an MT-32, its
- * piano A4 fell about 75 dB a second and then about 40, and nothing
- * stops a note releasing there. 20 frames left it at -38 dBr */
+/* Last release: an MT-32 piano A4 was still at -38 dBr after 20 */
 #define TAIL_FRAMES     60
 #define CLK_FRAMES      60
 #define SWEEP_FRAMES    10
-#define FIXUP_FRAMES    2           /* between messages after a program change */
+#define FIXUP_FRAMES    2
 
-/* Each note step in the level, pan, instrument and drum blocks. We
- * measured 20 and 40 on an MT-32 and an SC-55, in GS and MT-32 mode:
- * with 40 most blocks compared as well or better, and drums, strings
- * and plucked clearly better. The profiles take a different part of
- * the 40 for each block */
+/* Note step. 40 compared as well or better than 20 on an MT-32 and
+ * SC-55 (measured), the profiles read part of it per block */
 #define STEP_FRAMES     40
 
 midi_family_t *midiseq_family;
@@ -88,23 +61,29 @@ midi_set_t    *midiseq_set;
 int           midiseq_set_index;
 uint8_t       midiseq_pan[PAN_STEPS];   /* left, right, center */
 
-/* The tone, or one of the set's instruments, with the bank select each
- * needs */
-void midiseq_instrument(int which) {
-    int bank = which == TONE ? midiseq_family->tone_bank
-                             : midiseq_family->set_bank(midiseq_set_index);
+/* An instrument, or past MIDISET_INSTRUMENTS one of the set's customs */
+midi_instrument_t *midiseq_instrument_of(int instrument) {
+    if (instrument >= MIDISET_INSTRUMENTS)
+        return &midiseq_set->customs[instrument - MIDISET_INSTRUMENTS].instrument;
+    return &midiseq_set->instruments[instrument];
+}
+
+/* The tone or an instrument, with its bank */
+void midiseq_select(int instrument) {
+    int bank = instrument == TONE ? midiseq_family->tone_bank
+                                  : midiseq_family->set_bank(midiseq_set_index);
 
     if (bank >= 0)
         midi_control(MIDISEQ_CHANNEL, MIDI_CC_BANK, (uint8_t)bank);
-    midi_program(MIDISEQ_CHANNEL, which == TONE ? midiseq_family->tone_program
-                                                : midiseq_set->instruments[which].program);
+    midi_program(MIDISEQ_CHANNEL, instrument == TONE ? midiseq_family->tone_program
+                                                     : midiseq_instrument_of(instrument)->program);
 }
 
-unsigned midiseq_fixups(int which) {
-    return midiseq_family->fixups ? midiseq_family->fixups(which == TONE) : 0;
+unsigned midiseq_fixups(int instrument) {
+    return midiseq_family->fixups ? midiseq_family->fixups(instrument == TONE) : 0;
 }
 
-/* Everything that colors the sound off, centered, at full level */
+/* Effects off, centered, full level */
 void midiseq_channel_setup(uint8_t channel) {
     midi_control(channel, MIDI_CC_RESET_ALL, 0);
     midi_control(channel, MIDI_CC_VOLUME, 127);
@@ -118,7 +97,7 @@ void midiseq_channel_setup(uint8_t channel) {
 
 void midiseq_setup(midi_family_t *family, int set) {
     uint8_t  channel;
-    unsigned i;
+    unsigned fixup;
 
     midiseq_family    = family;
     midiseq_set_index = set;
@@ -134,25 +113,21 @@ void midiseq_setup(midi_family_t *family, int set) {
     midiseq_channel_setup(MIDISEQ_CHANNEL);
     midiseq_channel_setup(MIDIFAM_DRUMS);
     family->drum_setup(set);
+    if (family->custom_load && midiseq_set->custom_count)
+        family->custom_load(midiseq_set->customs, midiseq_set->custom_count);
 
-    midiseq_instrument(TONE);
-    for (i = 0; i < midiseq_fixups(TONE); i++) {
+    midiseq_select(TONE);
+    for (fixup = 0; fixup < midiseq_fixups(TONE); fixup++) {
         pit_delay_us(MIDIFAM_SYSEX_US);
-        family->fixup(1, i);
+        family->fixup(1, fixup);
     }
     pit_delay_us(MIDIFAM_SYSEX_US);
 }
 
-/* A release ends in a padding, out of the Silence blocks MDFourier
- * reads as the noise floor. Sound off (120) cuts it where the synth
- * knows it, notes off (123) releases it on the MT-32, the padding
- * before the closing Silence is longer for it (TAIL_FRAMES). The
- * expression the pulses left at 0 comes back here.
- *
- * Volume and expression at 0 through the paddings didn't stop a note
- * releasing on the MT-32 (measured), and its first pulse after them
- * came in quieter on one side: the end sync was found 12 ms late and
- * the frame rate read 650 ppm low. We don't use them */
+/* The last release goes in the padding. Sound off (120) where known,
+ * notes off (123) on the MT-32, so its padding is longer. Volume and
+ * expression at 0 didn't stop an MT-32 release, and threw the end
+ * sync 12 ms late (measured) */
 void midiseq_sound_off(uint8_t channel) {
     if (seq_stopped())
         return;
@@ -163,64 +138,59 @@ void midiseq_sound_off(uint8_t channel) {
         midi_control(channel, MIDI_CC_EXPRESSION, 127);
 }
 
-/* frames of silence, the pan for the TonePan block in the last one */
-void midiseq_gap(unsigned frames, int pan_first) {
+/* Silence, the TonePan pan set in its last frame */
+void midiseq_gap(unsigned frames, int tonepan_next) {
     seq_silence(frames - 1);
-    if (pan_first && !seq_stopped())
+    if (tonepan_next && !seq_stopped())
         midi_control(MIDISEQ_CHANNEL, MIDI_CC_PAN, midiseq_pan[0]);
     seq_silence(1);
 }
 
-/* A gap that changes the instrument at its start, so whatever the
- * change cuts of the last note stays in the gap, and sends what the
- * family needs after it one message every FIXUP_FRAMES: time for the
- * MT-32's early firmware to take each */
-void midiseq_program_gap(unsigned frames, int which) {
-    unsigned i;
+/* Program change at the start of a gap, then the fixups every
+ * FIXUP_FRAMES, the MT-32's early firmware needs the time */
+void midiseq_program_gap(unsigned frames, int instrument) {
+    unsigned fixup;
 
     if (!seq_stopped()) {
-        midiseq_instrument(which);
+        midiseq_select(instrument);
         midi_control(MIDISEQ_CHANNEL, MIDI_CC_PAN, 64);
     }
     seq_silence(FIXUP_FRAMES);
     frames -= FIXUP_FRAMES;
 
-    for (i = 0; i < midiseq_fixups(which); i++) {
+    for (fixup = 0; fixup < midiseq_fixups(instrument); fixup++) {
         if (!seq_stopped())
-            midiseq_family->fixup(which == TONE, i);
+            midiseq_family->fixup(instrument == TONE, fixup);
         seq_silence(FIXUP_FRAMES);
         frames -= FIXUP_FRAMES;
     }
     seq_silence(frames);
 }
 
-void midiseq_wait(unsigned frames) {
+void midiseq_wait_frames(unsigned frames) {
     while (frames--)
         vsync_wait();
 }
 
-/* A note off lets the note ring on through its release, longer than the
- * frames between pulses: each family ends a pulse its own way, sound off,
- * the expression, or on the MT-32 the tone's release of 0. The pulse's
- * end is in the synth's hands, its start isn't: note on comes first */
+/* Each family ends a pulse its own way, the note on starts it */
 void midiseq_pulse_train() {
-    int i;
+    int pulse;
 
     if (seq_stopped())
         return;
 
     seq_add_frames(PULSE_COUNT * PULSE_FRAMES * 2);
-    for (i = 0; i < PULSE_COUNT; i++) {
+    for (pulse = 0; pulse < PULSE_COUNT; pulse++) {
         if (midiseq_family->pulse_end == MIDIFAM_PULSE_EXPRESSION)
             midi_control(MIDISEQ_CHANNEL, MIDI_CC_EXPRESSION, 127);
         midi_note_on(MIDISEQ_CHANNEL, SYNC_NOTE, VELOCITY);
-        midiseq_wait(PULSE_FRAMES);
+        midiseq_wait_frames(PULSE_FRAMES);
         if (midiseq_family->pulse_end == MIDIFAM_PULSE_EXPRESSION)
             midi_control(MIDISEQ_CHANNEL, MIDI_CC_EXPRESSION, 0);
         else if (midiseq_family->pulse_end == MIDIFAM_PULSE_SOUND_OFF)
             midi_control(MIDISEQ_CHANNEL, MIDI_CC_SOUND_OFF, 0);
         midi_note_off(MIDISEQ_CHANNEL, SYNC_NOTE);
-        midiseq_wait(PULSE_FRAMES);
+        midiseq_wait_frames(PULSE_FRAMES);
     }
 }
 
@@ -234,7 +204,7 @@ void midiseq_tone(uint8_t note, unsigned frames) {
     midi_note_off(MIDISEQ_CHANNEL, note);
 }
 
-/* The blocks' steps, through seq_block(): on at the start, off at 80% */
+/* Block steps for seq_block(): on at the start, off at 80% */
 uint8_t midiseq_sweep_note(int step) {
     return (uint8_t)(SWEEP_LOW + step * SWEEP_STRIDE);
 }
@@ -251,11 +221,11 @@ void midiseq_level_on(void *context, int step) {
     midi_note_on(MIDISEQ_CHANNEL, TONE_NOTE, (uint8_t)(127 - step * LEVEL_STRIDE));
 }
 
-void midiseq_a4_on(void *context, int step) {
+void midiseq_tone_a4_on(void *context, int step) {
     midi_note_on(MIDISEQ_CHANNEL, TONE_NOTE, VELOCITY);
 }
 
-void midiseq_a4_off(void *context, int step) {
+void midiseq_tone_a4_off(void *context, int step) {
     midi_note_off(MIDISEQ_CHANNEL, TONE_NOTE);
 }
 
@@ -282,7 +252,7 @@ void midiseq_drum_off(void *context, int step) {
 }
 
 int midiseq_run() {
-    int i, result;
+    int instrument, custom, result;
 
     seq_begin(NULL);
 
@@ -299,15 +269,23 @@ int midiseq_run() {
     midiseq_gap(SILENCE_FRAMES, 0);
     seq_block(SWEEP_STEPS, SWEEP_FRAMES, NULL, midiseq_sweep_on, midiseq_sweep_off, NULL);
     midiseq_gap(SILENCE_FRAMES, 0);
-    seq_block(LEVEL_STEPS, STEP_FRAMES, NULL, midiseq_level_on, midiseq_a4_off, NULL);
+    seq_block(LEVEL_STEPS, STEP_FRAMES, NULL, midiseq_level_on, midiseq_tone_a4_off, NULL);
     midiseq_gap(SILENCE_FRAMES, 1);
-    seq_block(PAN_STEPS, STEP_FRAMES, midiseq_pan_prep, midiseq_a4_on, midiseq_a4_off, NULL);
+    seq_block(PAN_STEPS, STEP_FRAMES, midiseq_pan_prep, midiseq_tone_a4_on, midiseq_tone_a4_off, NULL);
 
     /* Typical: each instrument after a gap that selects it */
-    for (i = 0; i < MIDISET_INSTRUMENTS; i++) {
-        midiseq_program_gap(SILENCE_FRAMES, i);
+    for (instrument = 0; instrument < MIDISET_INSTRUMENTS; instrument++) {
+        midiseq_program_gap(SILENCE_FRAMES, instrument);
         seq_block(MIDISET_NOTES, STEP_FRAMES, NULL, midiseq_note_on, midiseq_note_off,
-                  &midiseq_set->instruments[i]);
+                  &midiseq_set->instruments[instrument]);
+    }
+
+    /* The games' custom timbres, MT-32 set. Before the drums, their crash
+     * rings into what follows */
+    for (custom = 0; custom < midiseq_set->custom_count; custom++) {
+        midiseq_program_gap(SILENCE_FRAMES, MIDISET_INSTRUMENTS + custom);
+        seq_block(MIDISET_NOTES, STEP_FRAMES, NULL, midiseq_note_on, midiseq_note_off,
+                  &midiseq_set->customs[custom].instrument);
     }
 
     /* Drums */

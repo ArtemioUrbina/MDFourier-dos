@@ -15,7 +15,7 @@ extern uint8_t  sb_irq, sb_dma;
 /* IRQs served, any driver */
 extern volatile unsigned pcm_irq_count;
 
-/* Stopped transfer. DSP reset, back to the 8-bit mono rate, speaker on */
+/* Stopped transfer: DSP reset, 8-bit mono rate, speaker on */
 void pcm_recover();
 
 /* ---- 8237, channels 0-3 ---- */
@@ -31,8 +31,7 @@ void dma_mask(uint8_t channel);
 /* Bytes left to transfer, minus 1: 0xFFFF once all went */
 uint16_t dma_count_left(uint8_t channel);
 
-/* Second 8237, channels 5-7. It moves 16-bit words: addresses are in
- * words (physical / 2) within 128 KB pages, page register bit 0 unused */
+/* Second 8237, channels 5-7, in words within 128 KB pages */
 #define DMA16_MASK      0xD4
 #define DMA16_MODE      0xD6
 #define DMA16_FLIPFLOP  0xD8
@@ -46,7 +45,7 @@ void dma16_program(uint8_t high_channel, void __far *buf, uint16_t words, uint8_
 #define PIC2_DATA       0xA1
 #define PIC_EOI         0x20
 
-/* A handler on an IRQ line, unmasked at the PIC. Put back as it was */
+/* A handler on an IRQ line, unmasked, put back as it was */
 typedef struct {
     uint8_t   line;
     int       installed;
@@ -61,7 +60,7 @@ uint16_t pic_irr();
 
 /* Lines a card can be on: 3-7, 9-12 and 15 */
 #define IRQ_CANDIDATES  0x9EF8
-/* IRR bits up while a device held its request and down once acked */
+/* IRR bits up while the device held its request, down once acked */
 uint8_t  irq_line_of(uint16_t before, uint16_t during, uint16_t after);
 
 /* 16-bit stereo drivers */
