@@ -33,7 +33,7 @@ CFLAGS = -q -bt=dos -mm -0 -fpi -i=include
 CFLAGS += -d2
 !endif
 
-all: $(BIN) mkpif.exe .SYMBOLIC
+all: $(BIN) .SYMBOLIC
 
 dirs: .SYMBOLIC
 	@if not exist build\nul mkdir build
@@ -143,4 +143,3 @@ clean: .SYMBOLIC
 	@if exist build\*.obj del build\*.obj
 	@if exist build\*.lnk del build\*.lnk
 	@if exist mdf.exe del mdf.exe
-	@if exist mkpif.exe del mkpif.exe
