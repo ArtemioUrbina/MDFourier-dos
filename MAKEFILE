@@ -12,11 +12,11 @@ CC = wcc
 
 # Objects depend on headers
 HDRS = include\carddrv.h include\dsp.h include\env.h include\irq.h include\kbd.h &
-       include\mixer.h include\pcmdrv.h include\pcmint.h include\wss.h include\sax.h include\host.h include\caps.h include\crystal.h include\cms.h include\cmsblk.h include\sb2seq.h include\midi.h include\midiseq.h include\seq.h include\fmblk.h include\pcmblk.h &
+       include\mixer.h include\pcmdrv.h include\pcmint.h include\wss.h include\sax.h include\host.h include\caps.h include\crystal.h include\cms.h include\cmsblk.h include\sb2seq.h include\midi.h include\midiseq.h include\midifam.h include\midiset.h include\profile.h include\seq.h include\fmblk.h include\pcmblk.h &
        include\mdf.h include\opl.h include\opltone.h include\pcm.h include\pit.h &
        include\sweep.h include\vsync.h
 
-OBJS = build\main.obj build\cards.obj build\dsp.obj build\pcm.obj build\pcmx.obj build\adpcm.obj build\irq.obj build\dma.obj build\ess.obj build\wss.obj build\crystal.obj build\sax.obj build\host.obj build\cms.obj build\cmsblk.obj build\sb2seq.obj build\midi.obj build\midiseq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
+OBJS = build\main.obj build\cards.obj build\dsp.obj build\pcm.obj build\pcmx.obj build\adpcm.obj build\irq.obj build\dma.obj build\ess.obj build\wss.obj build\crystal.obj build\sax.obj build\host.obj build\cms.obj build\cmsblk.obj build\sb2seq.obj build\midi.obj build\midifam.obj build\midiset.obj build\midiseq.obj build\seq.obj build\fmblk.obj build\pcmblk.obj build\env.obj build\kbd.obj build\mixer.obj build\pit.obj &
        build\vsync.obj build\opltone.obj build\mdf.obj &
        build\opl.obj
 # -q            quiet
@@ -33,7 +33,7 @@ CFLAGS = -q -bt=dos -mm -0 -fpi -i=include
 CFLAGS += -d2
 !endif
 
-all: $(BIN) .SYMBOLIC
+all: $(BIN) mkpif.exe .SYMBOLIC
 
 dirs: .SYMBOLIC
 	@if not exist build\nul mkdir build
@@ -57,6 +57,12 @@ build\sb2seq.obj: src\sb2seq.c $(HDRS)
 
 build\midi.obj: src\midi.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\midi.c
+
+build\midifam.obj: src\midifam.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\midifam.c
+
+build\midiset.obj: src\midiset.c $(HDRS)
+	$(CC) $(CFLAGS) -fo=$@ src\midiset.c
 
 build\midiseq.obj: src\midiseq.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\midiseq.c
@@ -130,7 +136,13 @@ build\mdf.obj: src\mdf.c $(HDRS)
 build\opl.obj: src\opl.c $(HDRS)
 	$(CC) $(CFLAGS) -fo=$@ src\opl.c
 
+# MKPIF: MDF.PIF for Windows, a program of its own
+mkpif.exe: dirs tools\mkpif.c
+	$(CC) $(CFLAGS) -fo=build\mkpif.obj tools\mkpif.c
+	wlink name mkpif.exe system dos file build\mkpif.obj
+
 clean: .SYMBOLIC
 	@if exist build\*.obj del build\*.obj
 	@if exist build\*.lnk del build\*.lnk
 	@if exist mdf.exe del mdf.exe
+	@if exist mkpif.exe del mkpif.exe
