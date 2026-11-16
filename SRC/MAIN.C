@@ -22,6 +22,8 @@
 #include "cms.h"
 #include "sb2seq.h"
 #include "caps.h"
+#include "midi.h"
+#include "midiseq.h"
 
 /* Exit codes, for batch files (IF ERRORLEVEL n means n or higher) */
 #define EXIT_OK         0   /* sequence complete, capture usable */
@@ -33,10 +35,12 @@
 #define EXIT_BAD_FRAMES 6   /* frame out of tolerance, discard */
 #define EXIT_WSS        7   /* WSS codec found, /W needed */
 #define EXIT_BAD_IRQ    8   /* the DSP raises another IRQ than BLASTER I */
+#define EXIT_NO_MIDI    9   /* MIDI prototype: no MPU-401 answered */
 
 int timing_test(double hz);
 void main_probe_fm(caps_t *caps);
 void main_nothing_to_play(caps_t *caps, blaster_cfg_t *cfg, int cms_mode);
+int main_midi(blaster_cfg_t *cfg, unsigned port, int mt32);
 
 int main(int argc, char *argv[]) {
     blaster_cfg_t cfg;
@@ -48,14 +52,16 @@ int main(int argc, char *argv[]) {
     int           timing_only = 0;
     int           cms_mode = 0;
     int           game_blaster;       /* CMS at BLASTER A without a DSP, nor a mixer */
+    int           midi_mode = 0;
+    int           midi_mt32 = 0;
+    unsigned      midi_port_option = 0;
 
     printf("MDFourier DOS 0.96 [240p Test Suite Fourier Audio compare tool]\n");
     printf("Artemio Urbina 2026 free software under GPL http://junkerhq.net/MDFourier\n");
 
     /* DOS ends a program on Ctrl-C or Ctrl-Break at its next console
-     * call, without the exit handlers the IRQ vector would stay ours
-     * and the mixer as set for capture.
-     * We ignore both and only ESC stops MDF */
+     * call, without the exit handlers: the IRQ vector would stay ours
+     * and the mixer as set for capture. We ignore both, ESC stops MDF */
     signal(SIGINT, SIG_IGN);
     signal(SIGBREAK, SIG_IGN);
 
@@ -74,8 +80,26 @@ int main(int argc, char *argv[]) {
                 caps.cms_port < 0x210 || caps.cms_port > 0x260 || (caps.cms_port & 0x0F))
                 bad_option = 1;
             cms_mode = 1;
+        } else if ((argv[i][0] == '/' || argv[i][0] == '-') &&
+                   (argv[i][1] == 'M' || argv[i][1] == 'm') && argv[i][2]) {
+            /* /M:port, /MT, /MT:port */
+            char *arg = argv[i] + 2;
+
+            if (*arg == 'T' || *arg == 't') {
+                midi_mt32 = 1;
+                arg++;
+            }
+            if (*arg == ':') {
+                if (sscanf(arg + 1, "%x", &midi_port_option) != 1 ||
+                    midi_port_option < 0x200 || midi_port_option > 0x3FE || (midi_port_option & 1))
+                    bad_option = 1;
+            } else if (*arg)
+                bad_option = 1;
+            midi_mode = 1;
         } else if (opt == 'C' || opt == 'c')
             cms_mode = 1;
+        else if (opt == 'M' || opt == 'm')
+            midi_mode = 1;
         else if (opt == 'K' || opt == 'k')
             set_mixer = 0;
         else if (opt == 'R' || opt == 'r')
@@ -88,18 +112,27 @@ int main(int argc, char *argv[]) {
             bad_option = 1;
     }
 
+    /* The MIDI prototype plays on its own, nothing else applies */
+    if (midi_mode && (cms_mode || report_only || timing_only))
+        bad_option = 1;
+
     if (bad_option) {
-        printf("Usage: MDF [/C[:port]] [/K] [/R] [/T] [/V] [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
+        printf("Usage: MDF [/C[:port]] [/K] [/M[:port]] [/R] [/T] [/V]\n"
+               "           [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
                "  Needs a 486SX or faster with internal cache enabled\n"
                "  The mixer levels are set for playback and restored at exit\n"
                "  /C  CMS sequence: CMS, FM, 8-bit PCM and ADPCM, SB 2.0 and Game Blaster,\n"
                "      CMS at BLASTER A or /C:220\n"
                "  /K  keep the current mixer settings and play sequence\n"
+               "  /M  MIDI prototype: GM, GS and XG synths through the MPU-401 at\n"
+               "      BLASTER P or 330, /M:300 sets the port. Record the synth's output\n"
+               "  /MT the same for an MT-32 or CM-32L, /MT:300 sets the port\n"
                "  /R  print the current mixer settings and exit\n"
                "  /T  frame timing test, 30s without sound, and exit\n"
                "  /V  verbose: show BLASTER, mixer levels, DSP and IRQ details,\n"
                "      Crystal CS4236/CS4237B codec levels and SB/WSS context\n"
-               "  /W  16-bit through a WSS codec\n"
+               "  /W  16-bit through WSS codec (OPL3-SAx and SB Pro compatibles),\n"
+               "      a Crystal CS4236/CS4237B codec plays it without /W\n"
                "      AUTO detects it\n"
                "      OFF skips it\n"
                "      /W:530,7,3 sets values manually\n");
@@ -128,7 +161,7 @@ int main(int argc, char *argv[]) {
         pit_init();
 
     if (!env_get_blaster(&cfg))
-        printf(" BLASTER: not set%s\n", report_only ? "" : ", PCM plays fillers");
+        printf(" BLASTER: not set%s\n", report_only || midi_mode ? "" : ", PCM plays fillers");
     else if (verbose)
         env_print(&cfg);
 
@@ -159,6 +192,9 @@ int main(int argc, char *argv[]) {
         }
         return timing_test(hz);
     }
+
+    if (midi_mode)
+        return main_midi(&cfg, midi_port_option, midi_mt32);
 
     if (cms_mode && !report_only) {
         if (!caps.cms_port)
@@ -226,7 +262,8 @@ int main(int argc, char *argv[]) {
         return EXIT_OK;
     }
 
-    /* FM gives the sync, or CMS under /C: without either we stop here */
+    /* FM gives the sync, or CMS under /C: without either we stop here,
+     * before the mixer, the timing and the PCM setup */
     main_probe_fm(&caps);
     if (caps.fm == CAPS_FM_NONE && (!cms_mode || caps.cms == CMS_NONE)) {
         main_nothing_to_play(&caps, &cfg, cms_mode);
@@ -259,10 +296,13 @@ int main(int argc, char *argv[]) {
                     printf(" Mixer: levels changed for capture, will restore at exit\n");
             } else
                 printf(" Mixer: settings not accepted, set your mixer manually\n");
+            /* Exit handlers run last registered first: the Crystal
+             * wavetable port, the WSS and DSP IRQ vectors, SRS, this
+             * mixer, the OPL3-SAx */
             atexit(mixer_restore);
         }
 
-        /* Effects that process the output like Crystal SRS 3D */
+        /* Effects that process the output: Crystal SRS 3D */
         if (caps.sbpro_compatible)
             cards_effects_off();
     }
@@ -273,7 +313,8 @@ int main(int argc, char *argv[]) {
     } else
         caps.mixer = mixer_report(&cfg);
 
-    /* The cards mixers, and an effect kept by /K, which alters what is recorded */
+    /* The cards' own mixers, and an effect kept by /K, which alters
+     * what is recorded */
     if (caps.sbpro_compatible) {
         caps.mixer = cards_mixer_report(caps.mixer);
         caps.mixer = cards_effects_check(caps.mixer);
@@ -301,7 +342,7 @@ int main(int argc, char *argv[]) {
         return EXIT_NO_VGA;
     }
 
-    /* No BLASTER so the PCM sections play fillers */
+    /* No BLASTER at all: the PCM sections play fillers, said once above */
     if (!game_blaster && cfg.port != -1)
         caps.pcm = pcm_init(&cfg, hz, !cms_mode);
     if (pcm_irq_mismatch())
@@ -376,6 +417,45 @@ void main_nothing_to_play(caps_t *caps, blaster_cfg_t *cfg, int cms_mode) {
         printf("  Check BLASTER A against the card's settings\n");
     else
         printf("  Check that the card's FM is enabled%s\n", cms_mode ? "" : ", or use /C with a CMS card");
+}
+
+/* /M: the MIDI prototype. No Sound Blaster setup: the synth is
+ * recorded from its own output */
+int main_midi(blaster_cfg_t *cfg, unsigned port, int mt32) {
+    double hz;
+    int    result;
+
+    if (!port)
+        port = cfg->mpu_port != -1 ? (unsigned)cfg->mpu_port : MIDI_PORT_DEFAULT;
+
+    if (!midi_init((uint16_t)port)) {
+        printf(" MIDI: no MPU-401 answered at 0x%03X. Check BLASTER P or use /M:port,\n"
+               "  and that the card's MPU-401 is enabled\n", port);
+        return EXIT_NO_MIDI;
+    }
+    /* Notes off and UART mode left, whatever way we exit */
+    atexit(midi_exit);
+    printf(" MIDI: MPU-401 at 0x%03X, UART mode%s\n", port,
+           midi_uart_unconfirmed() ? " (not confirmed, sending anyway)" : "");
+
+    if (!vsync_calibrate(&hz)) {
+        printf("No usable vertical retrace (VGA required), measured %.2f Hz\n", hz);
+        vsync_diagnose();
+        return EXIT_NO_VGA;
+    }
+
+    printf(" MIDI: GM, GS and XG resets, MT-32 reverb off, %s programs on channel 2\n",
+           mt32 ? "MT-32" : "GM");
+    midiseq_setup(mt32);
+
+    printf("Playing MDFourier MIDI (prototype)...\n");
+    result = midiseq_run();
+
+    if (result == SEQ_ABORTED)
+        return EXIT_ABORTED;
+    if (result == SEQ_BAD_FRAMES)
+        return EXIT_BAD_FRAMES;
+    return EXIT_OK;
 }
 
 /* /T: 30 s of frames, no sound, to see how the timing holds. Under
