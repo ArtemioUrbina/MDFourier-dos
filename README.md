@@ -64,7 +64,7 @@ The values below were measured with MDFourier on real hardware, using `-j` for a
 | Yamaha Audician 32 Plus | OPL3-SAx | 5978.3547 Hz | 49519.3937 Hz |
 | Compaq ES1869 | ESS ESFM | 5991.0690 Hz | 49624.7075 Hz |
 
-The Orpheus II (CS4237B) plays SB Pro stereo with left and right swapped against an SB16 and an OPL3-SAx, with or without the silent byte before the transfer. MDF records it as the card plays it.
+The Orpheus II (CS4237B) plays SB Pro stereo with left and right swapped against an SB16 and an OPL3-SAx, with or without the silent byte before the transfer. MDF records it as the card plays it. Its 16-bit stereo, played through the codec, comes out in order.
 
 Other cards it is being tested with: Sound Blaster 2.0 with CMS chips, ESS Solo-1, SB Live! SB0100, Montego II (Vortex 2), SB16 Vibra CT2960, Audigy 2 ZS and CMI8738.
 
@@ -78,10 +78,10 @@ http://junkerhq.net/MDFourier
 
 Builds with the **Open Watcom compiler** and `wmake`, using the **16-bit tools**. The `MAKEFILE` uses the medium memory model: the code is over 64 KB with CMS.
 
-Needs a 486SX or faster with the internal cache enabled. Developed and tested on machines ranging from a **486 DX2 through Pentium III**.
+Needs a 386DX-33 with cache or faster, with the CPU caches enabled: the main sequence ran on a **386DX-33 with 64 KB of cache**. Developed and tested on machines ranging from a **486 DX2 through Pentium III**.
 
 ## AI assistance
 
 Some of the code and documentation is written with the help of Claude, working from my design and direction. I am not an expert in DOS programming, but I have learned a lot over the past four months.
 
-I take the time to read, review and understand every change, rewrite it where needed, and test it on real hardware. My goal is not speed, but understanding and results that are as correct as I can make them.
+I take the time to read, review and understand every change, rewrite it where needed, and test it on real hardware. My aim is not speed, but understanding and results that are as correct as I can make them.

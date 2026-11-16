@@ -125,6 +125,14 @@ midi_family_t midifam_xg = {
 uint8_t midifam_mt32_reverb[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x03, 0x00, 0x6D, 0xF7 };
 uint8_t midifam_mt32_volume[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x16, 0x64, 0x76, 0xF7 };
 
+/* All parameter reset, address 7F xx xx in the same document, sent
+ * first. Measured: without it, back to back takes on an MT-32 played
+ * Organ and Brass in one of two ways; with it, four takes all played
+ * them the same way, and the other instruments compared better too.
+ * The wait is the one the other resets get, it worked, the shortest
+ * the MT-32 needs is not measured */
+uint8_t midifam_mt32_reset[]  = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x7F, 0x00, 0x00, 0x00, 0x01, 0xF7 };
+
 /* Patch Temp Area, part 1 (03 00 00), reverb switch (06h) off. A
  * program change loads the patch's own switch again. Measured: with
  * reverb on, a copy of each note came out of the other side about
@@ -132,37 +140,86 @@ uint8_t midifam_mt32_volume[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x10, 0x00, 0x16
 uint8_t midifam_mt32_dry[] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x03, 0x00, 0x06, 0x00, 0x77, 0xF7 };
 
 /*
- * The MT-32 lets a note go through its release, and neither expression
- * nor volume cuts it: measured, a pulse fell about 0.65 dB per ms and
- * was still there when the next began. The tone gets a release time of
- * 0 instead, in the timbre part 1 plays (Timbre Temp Area, 04 00 00):
- * TVA ENV TIME 5, offset 35h in each of the 4 partials. A program
- * change loads the timbre from ROM again.
+ * Our own tone, loaded the way MT-32 games load theirs: into Timbre
+ * Memory 1 (08 00 00), the common parameters and partial 1, and Patch
+ * Memory 48 (05 02 78) pointed at it, so program 47 plays it. Both
+ * at setup, before the timing starts, with a wait after each: we have
+ * no early firmware MT-32 to measure, and this is the path games used
+ * on all of them. Nothing for the tone goes out during the sequence.
+ *
+ * The ROM tone (program 47) is two or more oscillators a few cents
+ * apart. Measured: at A5 lines at 881.7, 884.4 and 886.8 Hz, its level
+ * beating down 14 dB about every 27 frames, the ToneLevel steps
+ * 13 dB down by frame 24. Holding its TVA levels at 100 changed
+ * nothing. Ours is one partial: an LA square, no pitch envelope nor
+ * LFO, the filter open, the level held, and a release of 0. The MT-32
+ * lets a note go through its release, and neither expression nor
+ * volume cuts it: measured, a pulse fell about 0.65 dB per ms and was
+ * still there when the next began, so the note off has to end it.
+ *
+ * Partial layout and neutral values from munt (mt32emu): coarse 36 and
+ * fine 50 no transposition, keyfollow 11 is 1, pitch envelope levels 50
+ * no change, TVA velocity sensitivity 50 none, TVA bias level 12 and
+ * TVF bias level 7 no change, pulse width velocity sensitivity 7 none.
+ * The TVF keyfollow matches the pitch one so the cutoff doesn't move
+ * with the key. The TVA velocity sensitivity, 75, sets the ToneLevel
+ * steps: measured, 8.3 dB down at velocity 71, in steps of 1.1 dB, a GS
+ * sine went 10 dB down.
+ *
+ * Measured, two takes: one line, 883.83 Hz at A5, the level held
+ * within 0.1 dB to the note off, the takes the same within 0.1 dB.
  */
-#define MT32_PARTIALS       4
-#define MT32_TVA_RELEASE    0x35
-
-uint8_t midifam_mt32_partial[MT32_PARTIALS][2] = {
-    { 0x00, 0x0E }, { 0x00, 0x48 }, { 0x01, 0x02 }, { 0x01, 0x3C }
+uint8_t midifam_mt32_tone[] = {
+    0xF0, 0x41, 0x10, 0x16, 0x12, 0x08, 0x00, 0x00,
+    /* Common: name, structure 1&2 and 3&4 both synth, partial 1 only,
+     * sustain on */
+    'M', 'D', 'F', ' ', 'T', 'o', 'n', 'e', ' ', ' ', 0, 0, 0x01, 0,
+    /* WG: coarse, fine, keyfollow, bender off, square, PCM wave,
+     * pulse width 50%, its velocity sensitivity */
+    36, 50, 11, 0, 0, 0, 0, 7,
+    /* Pitch envelope: depth 0, velocity, time keyfollow, 4 times,
+     * 5 levels */
+    0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50,
+    /* Pitch LFO: rate, depth, modulation sensitivity */
+    0, 0, 0,
+    /* TVF: cutoff open, resonance, keyfollow, bias point and level,
+     * envelope depth 0, velocity, depth and time keyfollow, 5 times,
+     * 4 levels */
+    100, 0, 11, 64, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 100,
+    /* TVA: level, velocity sensitivity, bias points and levels, time
+     * keyfollow and velocity, 5 times (attack and release 0), 4 levels */
+    100, 75, 64, 12, 64, 12, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 100,
+    0, 0xF7
 };
 
-/* DT1: F0 41 10 16 12, address, data, checksum, F7 */
-uint8_t midifam_mt32_set[11] = { 0xF0, 0x41, 0x10, 0x16, 0x12, 0x04, 0, 0, 0, 0, 0xF7 };
+/* Patch Memory: timbre group 2 (memory), timbre 1, key shift 24 and
+ * fine tune 50 none, bender range 12, assign mode 0, reverb off */
+uint8_t midifam_mt32_patch[] = {
+    0xF0, 0x41, 0x10, 0x16, 0x12, 0x05, 0x02, 0x78,
+    2, 0, 24, 50, 12, 0, 0, 0,
+    0, 0xF7
+};
 
-void midifam_mt32_release(unsigned partial) {
-    uint8_t  *m  = midifam_mt32_set;
-    unsigned low = midifam_mt32_partial[partial][1] + MT32_TVA_RELEASE;
+/* Fills in a DT1's checksum: address and data, before the F7 */
+void midifam_roland_checksum(uint8_t *m, unsigned length) {
+    unsigned i, sum = 0;
 
-    m[6] = (uint8_t)(midifam_mt32_partial[partial][0] + (low >> 7));
-    m[7] = (uint8_t)(low & 0x7F);
-    m[8] = 0;
-    m[9] = (uint8_t)((128 - ((m[5] + m[6] + m[7] + m[8]) & 0x7F)) & 0x7F);
-    midi_sysex(m, sizeof(midifam_mt32_set));
+    for (i = 5; i < length - 2; i++)
+        sum += m[i];
+    m[length - 2] = (uint8_t)((128 - (sum & 0x7F)) & 0x7F);
 }
 
+/* Generous, the most we wait for anything else, not measured */
+#define MT32_MEMORY_US  MIDIFAM_RESET_US
+
 void midifam_mt32_setup() {
+    midifam_sysex(midifam_mt32_reset, sizeof(midifam_mt32_reset), MIDIFAM_RESET_US);
     midifam_sysex(midifam_mt32_reverb, sizeof(midifam_mt32_reverb), MIDIFAM_SYSEX_US);
     midifam_sysex(midifam_mt32_volume, sizeof(midifam_mt32_volume), MIDIFAM_SYSEX_US);
+    midifam_roland_checksum(midifam_mt32_tone, sizeof(midifam_mt32_tone));
+    midifam_sysex(midifam_mt32_tone, sizeof(midifam_mt32_tone), MT32_MEMORY_US);
+    midifam_roland_checksum(midifam_mt32_patch, sizeof(midifam_mt32_patch));
+    midifam_sysex(midifam_mt32_patch, sizeof(midifam_mt32_patch), MT32_MEMORY_US);
 }
 
 /* Its effects are set by sysex, after each program change */
@@ -173,17 +230,14 @@ int midifam_mt32_bank(int set) {
     return set == MIDISET_MT32 ? MIDIFAM_NO_BANK : MIDIFAM_CANT;
 }
 
-/* The tone: release 0 on each partial, then reverb off. Other programs:
- * reverb off */
+/* The tone's patch has reverb off. Other programs load their patch's
+ * own switch: reverb off after each */
 unsigned midifam_mt32_fixups(int tone) {
-    return tone ? MT32_PARTIALS + 1 : 1;
+    return tone ? 0 : 1;
 }
 
 void midifam_mt32_fixup(int tone, unsigned index) {
-    if (tone && index < MT32_PARTIALS)
-        midifam_mt32_release(index);
-    else
-        midi_sysex(midifam_mt32_dry, sizeof(midifam_mt32_dry));
+    midi_sysex(midifam_mt32_dry, sizeof(midifam_mt32_dry));
 }
 
 /* The rhythm part's keys each have their own reverb switch, Rhythm
@@ -206,9 +260,9 @@ void midifam_mt32_drum_setup(int set) {
     }
 }
 
-/* Square Wave, program 47. It pans the other way round, 0 is right,
- * measured, and the SC-55 manual says so too (p. 32). It doesn't know
- * sound off (120): the sequence waits */
+/* Program 47, our tone in its patch. It pans the other way round,
+ * 0 is right, measured, and the SC-55 manual says so too (p. 32). It
+ * doesn't know sound off (120): the sequence waits */
 midi_family_t midifam_mt32 = {
     "MT-32", "MT32", MIDISET_MT32, MIDIFAM_NO_BANK, 47, 127, 0, MIDIFAM_PULSE_NOTE_OFF, 0,
     midifam_mt32_setup, midifam_mt32_effects, midifam_mt32_bank,

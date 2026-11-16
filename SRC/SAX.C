@@ -317,7 +317,7 @@ int sax_mixer_report() {
                power, analog_pd);
 
     if (!warn) {
-        printf(" Mixer: %s, OK for capture\n", sax_name());
+        printf(" Mixer: %s %s\n", sax_name(), mixer_ok_text());
         return MIXER_OK;
     }
 

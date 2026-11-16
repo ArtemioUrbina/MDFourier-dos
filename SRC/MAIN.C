@@ -109,7 +109,7 @@ int main(int argc, char *argv[]) {
     if (bad_option) {
         printf("Usage: MDF [/C[:port]] [/K] [/M[:family][,set][,port]] [/R] [/T] [/V]\n"
                "           [/W:AUTO | /W:OFF | /W:port,irq,dma]\n"
-               "  Needs a 486SX or faster with internal cache enabled\n"
+               "  Needs a 386DX-33 with cache or faster\n"
                "  The mixer levels are set for playback and restored at exit\n"
                "  /C  CMS sequence: CMS, FM, 8-bit PCM and ADPCM, SB 2.0 and Game Blaster,\n"
                "      CMS at BLASTER A or /C:220\n"
@@ -120,8 +120,7 @@ int main(int argc, char *argv[]) {
                "  /MT  the same as /M:MT32, for an MT-32, CM-32L or LAPC-I\n"
                "  /R  print the current mixer settings and exit\n"
                "  /T  frame timing test, 30s without sound, and exit\n"
-               "  /V  verbose: show BLASTER, mixer levels, DSP and IRQ details,\n"
-               "      Crystal CS4236/CS4237B codec levels and SB/WSS context\n"
+               "  /V  verbose: BLASTER, mixer, IRQ, codec levels and SB/WSS context\n"
                "  /W  16-bit through WSS codec (OPL3-SAx and SB Pro compatibles),\n"
                "      a Crystal CS4236/CS4237B codec plays it without /W\n"
                "      AUTO detects it\n"
@@ -218,9 +217,8 @@ int main(int argc, char *argv[]) {
             /* The ESS identify command goes only to a DSP 3.xx, the
              * version the AudioDrive reports */
             caps.dsp_ess = major == 3 && mixer_is_ess(base);
-            if (verbose)
-                printf(" DSP: version %u.%02u%s\n", major, caps.dsp_version.minor,
-                       caps.dsp_ess ? ", ESS" : "");
+            printf(" DSP: version %u.%02u%s\n", major, caps.dsp_version.minor,
+                   caps.dsp_ess ? ", ESS" : "");
             /* SB Pro compatibles, check for WSS codec next to the DSP */
             if (major == 3 && host_is_windows())
                 wss_ignored = "Windows owns the card's 16-bit hardware";
@@ -284,10 +282,9 @@ int main(int argc, char *argv[]) {
             mixer_saved = cards_mixer_set(mixer_saved);
 
         if(mixer_saved != -1) {
-            if(mixer_saved) {
-                if (verbose)
-                    printf(" Mixer: levels changed for capture, will restore at exit\n");
-            } else
+            if (mixer_saved)
+                mixer_how = MIXER_HOW_SET;
+            else
                 printf(" Mixer: settings not accepted, set your mixer manually\n");
             /* Exit handlers run last registered first: the Crystal
              * wavetable port, the WSS and DSP IRQ vectors, SRS, this
@@ -299,6 +296,9 @@ int main(int argc, char *argv[]) {
         if (caps.sbpro_compatible)
             cards_effects_off();
     }
+
+    if (!set_mixer)
+        mixer_how = MIXER_HOW_KEPT;
 
     if (game_blaster) {
         printf(" Mixer: none (Game Blaster), set the volume manually\n");
@@ -317,9 +317,14 @@ int main(int argc, char *argv[]) {
     if (verbose && caps.sbpro_compatible)
         cards_report((uint16_t)cfg.port);
 
-    if (verbose && !cms_mode)
-        printf(" Mixer: unfiltered sweeps %s\n", mixer_sbpro_filter_switched() ?
-               "with the output filter off" : "as the others, no filter switch here");
+    /* What we do with the SB Pro output filter for the _NF sweeps */
+    if (verbose && !cms_mode) {
+        if (mixer_sbpro_filter_switched())
+            printf(" Mixer: output filter turned off for the _NF sweeps, back on after\n");
+        else
+            printf(" Mixer: output filter not switched for the _NF sweeps%s\n",
+                   set_mixer ? ", no filter bit" : " (/K)");
+    }
 
     if(caps.mixer == MIXER_WARN && !set_mixer)
         printf("  NOTE: kept by /K, run without it to set the mixer for capture\n");

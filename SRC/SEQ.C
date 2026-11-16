@@ -92,8 +92,8 @@ int seq_report() {
 
     if (seq_late_stop) {
         printf("\nStopped at frame %lu, it ran late: this CPU is too slow.\n"
-               "  MDF needs a 486SX with its internal cache enabled, in an\n"
-               "  emulator raise the cycles. Discard this capture\n", vsync_first_bad());
+               "  MDF needs a 386DX-33 with 64 KB of cache or higher.\n"
+               "  In an emulator raise the cycles. Discard this capture\n", vsync_first_bad());
         return SEQ_BAD_FRAMES;
     }
     if (seq_aborted) {

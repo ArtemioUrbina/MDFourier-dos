@@ -182,6 +182,16 @@ int mixer_sb16_has_tone(uint16_t base) {
     return mix_present(base, SB16_TREBLE, 0xF0) && mix_present(base, SB16_BASS, 0xF0);
 }
 
+int mixer_how = MIXER_HOW_ASKED;
+
+char *mixer_ok_text() {
+    if (mixer_how == MIXER_HOW_SET)
+        return "set for capture, restored at exit";
+    if (mixer_how == MIXER_HOW_KEPT)
+        return "kept as it was (/K), OK for capture";
+    return "OK for capture";
+}
+
 int mixer_report_sb16(uint16_t base) {
     uint8_t mstl, mstr, fml, fmr, vol, vor, outsw, gl, gr, tl, tr, bl, br, mic, pcspk;
     int warn, low, boost, tone0, tone, other, has_tone;
@@ -247,7 +257,7 @@ int mixer_report_sb16(uint16_t base) {
         printf("  WARNING: PC speaker above minimum, may add noise\n");
 
     if (!warn) {
-        printf(" Mixer: SB16, OK for capture\n");
+        printf(" Mixer: SB16 %s\n", mixer_ok_text());
         return MIXER_OK;
     }
     return MIXER_WARN;
@@ -369,7 +379,7 @@ int mixer_report_sbpro(uint16_t base) {
     mixer_warn_sbpro_out(out);
 
     if (!warn) {
-        printf(" Mixer: SB Pro, OK for capture\n");
+        printf(" Mixer: SB Pro %s\n", mixer_ok_text());
         return MIXER_OK;
     }
     return MIXER_WARN;
@@ -423,7 +433,7 @@ int mixer_report_ess(uint16_t base) {
     mixer_warn_sbpro_out(out);
 
     if (!warn) {
-        printf(" Mixer: ESS, OK for capture\n");
+        printf(" Mixer: ESS %s\n", mixer_ok_text());
         return MIXER_OK;
     }
     return MIXER_WARN;

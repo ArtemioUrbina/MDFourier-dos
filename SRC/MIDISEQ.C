@@ -11,7 +11,7 @@
  * family's (MIDIFAM.C), what the typical blocks play is the content
  * set's (MIDISET.C). Melodic notes on MIDI channel 2, drums on 10.
  *
- *   Sync        10 pulses of the tone at C8 (4186 Hz), two frames on, two off
+ *   Sync        10 pulses of the tone at C8 (4186 Hz), one frame on, one off
  *   Padding     the pulses' release, out of the silence
  *   Silence
  *   MIDICLK     the tone at A5 (880 Hz), the tuning: MDFourier reads A4
@@ -33,9 +33,14 @@
  * where a tone near 6 kHz stands out best. C8 is the highest note every
  * synth plays (FluidSynth plays nothing above it with the soundfonts we
  * tried, the MT-32 plays 12 to 108); the profile asks for 6000 Hz, which
- * in those windows finds C8 too. A synth's attack and release blur a
- * pulse of one frame, so ours are two, and the profile says so (28 ms,
- * Sync blocks of 40 frames).
+ * in those windows finds C8 too.
+ *
+ * Each family ends a pulse sharply: on an MT-32 and an SC-55 pulses of
+ * two frames measured 27.7 to 28.5 ms for 28.5, starting on time to
+ * 0.3 ms. So pulses are one frame, as MDFourier's other profiles: its
+ * start search placed a two-frame train one pulse late on an MT-32
+ * capture and corrected it by one frame, reading the rate 600 ppm off.
+ * FluidSynth blurred one-frame pulses before each family had its cut.
  *
  * The clean blocks compare a synth with others of its family, real or
  * emulated. The typical blocks compare any two synths that played the
@@ -47,7 +52,7 @@
 #define TONE            -1          /* midiseq_instrument(): the family's tone */
 
 #define PULSE_COUNT     10
-#define PULSE_FRAMES    2           /* on, then as many off */
+#define PULSE_FRAMES    1           /* on, then as many off */
 #define SYNC_NOTE       108         /* C8, 4186.0 Hz */
 #define CLOCK_NOTE      81          /* A5, 880 Hz */
 #define TONE_NOTE       69          /* A4, 440 Hz */
@@ -69,8 +74,14 @@
 #define TAIL_FRAMES     60
 #define CLK_FRAMES      60
 #define SWEEP_FRAMES    10
-#define STEP_FRAMES     20
 #define FIXUP_FRAMES    2           /* between messages after a program change */
+
+/* Each note step in the level, pan, instrument and drum blocks. We
+ * measured 20 and 40 on an MT-32 and an SC-55, in GS and MT-32 mode:
+ * with 40 most blocks compared as well or better, and drums, strings
+ * and plucked clearly better. The profiles take a different part of
+ * the 40 for each block */
+#define STEP_FRAMES     40
 
 midi_family_t *midiseq_family;
 midi_set_t    *midiseq_set;
