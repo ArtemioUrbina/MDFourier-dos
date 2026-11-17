@@ -16,7 +16,7 @@ midi_set_t midi_sets[MIDISET_COUNT] = {
         { "Mallet",   12, 48, 84 },     /* Marimba */
         { "Plucked",  46, 31, 91 },     /* Orchestral Harp */
         { "Synth",    62, 36, 96 } },   /* Synth Brass 1 */
-      { 49, 46, 36, 38, 42, 37, 63, 75 }, 0, NULL },
+      { 49, 46, 36, 38, 42, 37, 63, 75 }, 0, NULL, NULL },
     { "MT-32", "MT32", PROFILE_MT32_NAME, PROFILE_MT32_FILE, {
         { "Strings",  48, 36, 96 },     /* Str Sect 1 */
         { "Organ",     9, 36, 96 },     /* Elec Org 2 */
@@ -26,7 +26,8 @@ midi_set_t midi_sets[MIDISET_COUNT] = {
         { "Mallet",  104, 48, 84 },     /* Marimba */
         { "Plucked",  58, 31, 91 },     /* Harp 2 */
         { "Synth",    24, 36, 96 } },   /* Syn Brass 1 */
-      { 49, 46, 36, 38, 42, 37, 63, 75 }, MIDISET_CUSTOMS, midi_customs }
+      { 49, 46, 36, 38, 42, 37, 63, 75 }, MIDISET_CUSTOMS, midi_customs,
+      &midi_custom_clock }
 };
 
 int midiset_find(char *option) {

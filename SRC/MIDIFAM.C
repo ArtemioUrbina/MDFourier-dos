@@ -220,46 +220,53 @@ void midifam_mt32_drum_setup(int set) {
 
 /* The games' timbres into Timbre Memory 2 on, one message each as the
  * games sent them, and their programs' patches pointed at them, reverb
- * off. Patch values as the games had them */
+ * off. Patch values as the games had them. The clock timbre after them */
 uint8_t midifam_mt32_memory[10 + MIDICUST_TIMBRE_SIZE] = {
     0xF0, 0x41, 0x10, 0x16, 0x12
 };
 
-void midifam_mt32_custom_load(midi_custom_t *customs, int count) {
+void midifam_mt32_load(midi_custom_t *custom, unsigned slot) {
     uint8_t  *message = midifam_mt32_memory;
-    unsigned custom, byte, address;
+    unsigned byte, address;
 
-    printf(" MIDI: %d game timbres to its memory\n", count);
-    for (custom = 0; custom < (unsigned)count; custom++) {
-        message[5] = 0x08;
-        message[6] = (uint8_t)((custom + 1) * 2);
-        message[7] = 0x00;
-        for (byte = 0; byte < MIDICUST_TIMBRE_SIZE; byte++)
-            message[8 + byte] = customs[custom].timbre[byte];
-        /* P-LFO DEPTH, 15h in each of the 4 partials after the 14 common bytes */
-        if (customs[custom].lfo_off)
-            for (byte = 0; byte < 4; byte++)
-                message[8 + 14 + byte * 58 + 0x15] = 0;
-        message[8 + MIDICUST_TIMBRE_SIZE + 1] = 0xF7;
-        midifam_roland_checksum(message, 10 + MIDICUST_TIMBRE_SIZE);
-        midifam_sysex(message, 10 + MIDICUST_TIMBRE_SIZE, MT32_MEMORY_WAIT_US);
+    message[5] = 0x08;
+    message[6] = (uint8_t)(slot * 2);
+    message[7] = 0x00;
+    for (byte = 0; byte < MIDICUST_TIMBRE_SIZE; byte++)
+        message[8 + byte] = custom->timbre[byte];
+    /* P-LFO DEPTH, 15h in each of the 4 partials after the 14 common bytes */
+    if (custom->lfo_off)
+        for (byte = 0; byte < 4; byte++)
+            message[8 + 14 + byte * 58 + 0x15] = 0;
+    message[8 + MIDICUST_TIMBRE_SIZE + 1] = 0xF7;
+    midifam_roland_checksum(message, 10 + MIDICUST_TIMBRE_SIZE);
+    midifam_sysex(message, 10 + MIDICUST_TIMBRE_SIZE, MT32_MEMORY_WAIT_US);
 
-        address = customs[custom].instrument.program * 8;
-        message[5]  = 0x05;
-        message[6]  = (uint8_t)(address >> 7);
-        message[7]  = (uint8_t)(address & 0x7F);
-        message[8]  = 2;                        /* timbre memory */
-        message[9]  = (uint8_t)(custom + 1);
-        message[10] = 24;                       /* key shift none */
-        message[11] = 50;                       /* fine tune none */
-        message[12] = 12;                       /* bender range */
-        message[13] = 0;                        /* assign mode */
-        message[14] = 0;                        /* reverb off */
-        message[15] = 0;
-        message[17] = 0xF7;
-        midifam_roland_checksum(message, 18);
-        midifam_sysex(message, 18, MT32_MEMORY_WAIT_US);
-    }
+    address = custom->instrument.program * 8;
+    message[5]  = 0x05;
+    message[6]  = (uint8_t)(address >> 7);
+    message[7]  = (uint8_t)(address & 0x7F);
+    message[8]  = 2;                        /* timbre memory */
+    message[9]  = (uint8_t)slot;
+    message[10] = 24;                       /* key shift none */
+    message[11] = 50;                       /* fine tune none */
+    message[12] = 12;                       /* bender range */
+    message[13] = 0;                        /* assign mode */
+    message[14] = 0;                        /* reverb off */
+    message[15] = 0;
+    message[17] = 0xF7;
+    midifam_roland_checksum(message, 18);
+    midifam_sysex(message, 18, MT32_MEMORY_WAIT_US);
+}
+
+void midifam_mt32_custom_load(midi_custom_t *customs, int count, midi_custom_t *clock) {
+    unsigned custom;
+
+    printf(" MIDI: %d game timbres and the clock timbre to its memory\n", count);
+    for (custom = 0; custom < (unsigned)count; custom++)
+        midifam_mt32_load(&customs[custom], custom + 1);
+    if (clock)
+        midifam_mt32_load(clock, count + 1);
 }
 
 /* Program 47, the custom tone. Pans the other way round, 0 is right

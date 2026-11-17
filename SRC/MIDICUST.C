@@ -112,6 +112,23 @@ uint8_t midicust_rhodes2[MIDICUST_TIMBRE_SIZE] = {
     0, 0, 92, 0, 0, 38, 100, 0, 0, 0
 };
 
+/* The clock: the custom tone with pitch and filter keyfollow 0, it plays
+ * the same pitch, C4, whatever the key. We play C8: a synth that loaded
+ * it plays C4, a GS synth plays its MT-32 map's preset at C8. MDFourier
+ * skips the custom blocks when this tone is missing (optional clock) */
+uint8_t midicust_clock[MIDICUST_TIMBRE_SIZE] = {
+    'M', 'D', 'F', ' ', 'C', 'l', 'o', 'c', 'k', ' ', 0, 0, 0x01, 0,
+    36, 50, 3, 0, 0, 0, 0, 7,
+    0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50,
+    0, 0, 0,
+    100, 0, 3, 64, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 100,
+    100, 75, 64, 12, 64, 12, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 100
+    /* partials 2-4 muted, left at 0 */
+};
+
+/* Program 3, Elec Piano 1 on a GS MT-32 map */
+midi_custom_t midi_custom_clock = { { "CustomCLK", 3, 108, 108 }, midicust_clock, 0 };
+
 midi_custom_t midi_customs[MIDISET_CUSTOMS] = {
     { { "Brass17",   121, 30,  67 }, midicust_brass17, 1 },    /* Castlevania, 2 saws */
     { { "HeavyBass",  67, 24,  55 }, midicust_heavybass, 0 },  /* Dune, 1 square */

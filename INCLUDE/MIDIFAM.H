@@ -30,7 +30,7 @@ typedef struct {
     unsigned (*fixups)(int tone);   /* after a program change, NULL for none */
     void     (*fixup)(int tone, unsigned index);
     void     (*drum_setup)(int set);    /* drum kit setup */
-    void     (*custom_load)(midi_custom_t *customs, int count);    /* NULL: presets */
+    void     (*custom_load)(midi_custom_t *customs, int count, midi_custom_t *clock);  /* NULL: presets */
 } midi_family_t;
 
 #define MIDIFAM_GM      0

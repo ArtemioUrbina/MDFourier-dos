@@ -17,6 +17,7 @@
  *   ToneLevel   A4, velocity 127 down to 71
  *   TonePan     A4 left, right, center
  *   8 instruments, 8 notes each
+ *   CustomCLK   the clock timbre, fixed at C4, MT-32 set
  *   5 games' custom timbres, MT-32 set
  *   Drums       8 hits
  *   Padding, Silence, Sync
@@ -29,6 +30,7 @@
 #define MIDISEQ_CHANNEL 1           /* MIDI channel 2 */
 #define MIDI_CC_BANK    0
 #define TONE            -1
+#define CUSTOM_CLOCK    -2          /* the set's custom clock, MT-32 set */
 
 #define PULSE_COUNT     10
 #define PULSE_FRAMES    1           /* on, then as many off */
@@ -63,6 +65,8 @@ uint8_t       midiseq_pan[PAN_STEPS];   /* left, right, center */
 
 /* An instrument, or past MIDISET_INSTRUMENTS one of the set's customs */
 midi_instrument_t *midiseq_instrument_of(int instrument) {
+    if (instrument == CUSTOM_CLOCK)
+        return &midiseq_set->custom_clock->instrument;
     if (instrument >= MIDISET_INSTRUMENTS)
         return &midiseq_set->customs[instrument - MIDISET_INSTRUMENTS].instrument;
     return &midiseq_set->instruments[instrument];
@@ -114,7 +118,8 @@ void midiseq_setup(midi_family_t *family, int set) {
     midiseq_channel_setup(MIDIFAM_DRUMS);
     family->drum_setup(set);
     if (family->custom_load && midiseq_set->custom_count)
-        family->custom_load(midiseq_set->customs, midiseq_set->custom_count);
+        family->custom_load(midiseq_set->customs, midiseq_set->custom_count,
+                            midiseq_set->custom_clock);
 
     midiseq_select(TONE);
     for (fixup = 0; fixup < midiseq_fixups(TONE); fixup++) {
@@ -280,8 +285,13 @@ int midiseq_run() {
                   &midiseq_set->instruments[instrument]);
     }
 
-    /* The games' custom timbres, MT-32 set. Before the drums, their crash
-     * rings into what follows */
+    /* The games' custom timbres, MT-32 set, after the clock that tells
+     * MDFourier they were loaded. Before the drums, their crash rings
+     * into what follows */
+    if (midiseq_set->custom_clock) {
+        midiseq_program_gap(SILENCE_FRAMES, CUSTOM_CLOCK);
+        midiseq_tone(midiseq_set->custom_clock->instrument.low, CLK_FRAMES);
+    }
     for (custom = 0; custom < midiseq_set->custom_count; custom++) {
         midiseq_program_gap(SILENCE_FRAMES, MIDISET_INSTRUMENTS + custom);
         seq_block(MIDISET_NOTES, STEP_FRAMES, NULL, midiseq_note_on, midiseq_note_off,

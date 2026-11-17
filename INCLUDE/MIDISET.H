@@ -39,10 +39,12 @@ typedef struct {
     uint8_t           drums[MIDISET_DRUMS];   /* notes on channel 10 */
     int               custom_count;
     midi_custom_t     *customs;
+    midi_custom_t     *custom_clock;
 } midi_set_t;
 
 extern midi_set_t    midi_sets[MIDISET_COUNT];
 extern midi_custom_t midi_customs[MIDISET_CUSTOMS];
+extern midi_custom_t midi_custom_clock;
 
 /* The set named by an option, or -1 */
 int midiset_find(char *option);
